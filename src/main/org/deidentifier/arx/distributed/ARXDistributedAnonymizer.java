@@ -48,7 +48,7 @@ public class ARXDistributedAnonymizer {
      * Distribution strategy
      * @author Fabian Prasser
      */
-    public static enum DistributionStrategy {
+    public enum DistributionStrategy {
         LOCAL
     }
 
@@ -56,7 +56,7 @@ public class ARXDistributedAnonymizer {
      * Partitioning strategy
      * @author Fabian Prasser
      */
-    public static enum PartitioningStrategy {
+    public enum PartitioningStrategy {
         RANDOM,
         SORTED
     }
@@ -65,7 +65,7 @@ public class ARXDistributedAnonymizer {
      * Strategy for defining common transformation levels
      * @author Fabian Prasser
      */
-    public static enum TransformationStrategy {
+    public enum TransformationStrategy {
         GLOBAL_AVERAGE,
         GLOBAL_MINIMUM,
         LOCAL

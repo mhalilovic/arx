@@ -224,12 +224,18 @@ public class QualityMeasureColumnOriented {
                 double aggregated = function.aggregate(toArray(result));
                 double min = function.aggregate(toArray(minimum));
                 double max = function.aggregate(toArray(maximum));
+                //TODO: Why do we do this weird normalization here?
                 return (aggregated - min) / (max - min);
             }
         } catch (Exception e) {
             // Fail silently
             return Double.NaN;
         }
+    }
+
+    public double getGranularity() {
+        QualityAggregateFunction function = QualityAggregateFunction.ARITHMETIC_MEAN;
+        return 1d - function.aggregate(toArray(result));
     }
 
     /**

@@ -663,7 +663,7 @@ abstract class QualityModel<T> {
 
     /**
      * We assume that an entry is suppressed, if all values are equal
-     * 
+     * //TODO: This assumption leads to problems when values are equal by chance - unlikely with a lot of QI's
      * @param entry
      * @return
      */
@@ -673,6 +673,7 @@ abstract class QualityModel<T> {
         if (handle.isOutlier(row)) { return true; }
 
         // Check values
+        // TODO: If indicies length is 1 (one quasi identifier), this does not work!
         for (int i = 1; i < indices.length; i++) {
             if (!handle.getValue(row, indices[i - 1]).equals(handle.getValue(row, indices[i]))) { return false; }
         }
