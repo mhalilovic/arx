@@ -35,6 +35,14 @@ public class ARXDistributedResult {
     /** Timing */
     private long                      timeAnonymize;
     /** Timing */
+    private long                      timeStep2A;
+    /** Timing */
+    private long                      timeStep2B;
+    /** Timing */
+    private long                      timeStep3;
+    /** Timing */
+    private long                      timeQuality;
+    /** Timing */
     private long                      timePostprocess;
     /** Max memory consumption */
     private long                      maxMemoryConsumption = Long.MIN_VALUE;
@@ -45,8 +53,7 @@ public class ARXDistributedResult {
      * @param data
      */
     public ARXDistributedResult(Data data) {
-        this(data, 0, 0, 0, null, Long.MIN_VALUE);
-        
+        this(data, 0, 0, 0, 0, 0, 0, 0,null, Long.MIN_VALUE);
     }
 
     /**
@@ -54,20 +61,32 @@ public class ARXDistributedResult {
      * @param data
      * @param timePrepare
      * @param timeAnonymize
+     * @param timeStep2A
+     * @param timeStep2B
+     * @param timeStep3
+     * @param timeQuality
      * @param timePostprocess
      */
     public ARXDistributedResult(Data data, 
                                 long timePrepare, 
                                 long timeAnonymize,
+                                long timeStep2A,
+                                long timeStep2B,
+                                long timeStep3,
+                                long timeQuality,
                                 long timePostprocess) {
-        this(data, timePrepare, timeAnonymize, timePostprocess, null, Long.MIN_VALUE);
+        this(data, timePrepare, timeAnonymize, timeStep2A, timeStep2B, timeStep3, timeQuality, timePostprocess, null, Long.MIN_VALUE);
     }
-        
+
     /**
      * Creates a new instance
-     * @param handles
+     * @param data
      * @param timePrepare
      * @param timeAnonymize
+     * @param timeStep2A
+     * @param timeStep2B
+     * @param timeStep3
+     * @param timeQuality
      * @param timePostprocess
      * @param qualityMetrics
      * @param maxMemoryConsumption
@@ -75,6 +94,10 @@ public class ARXDistributedResult {
     public ARXDistributedResult(Data data, 
                                 long timePrepare, 
                                 long timeAnonymize,
+                                long timeStep2A,
+                                long timeStep2B,
+                                long timeStep3,
+                                long timeQuality,
                                 long timePostprocess,
                                 Map<String, List<Double>> qualityMetrics,
                                 long maxMemoryConsumption) {
@@ -82,6 +105,10 @@ public class ARXDistributedResult {
         // Store
         this.timePrepare = timePrepare;
         this.timeAnonymize = timeAnonymize;
+        this.timeStep2A = timeStep2A;
+        this.timeStep2B = timeStep2B;
+        this.timeStep3 = timeStep3;
+        this.timeQuality = timeQuality;
         this.timePostprocess = timePostprocess;
         this.maxMemoryConsumption = maxMemoryConsumption;
         this.data = data;
@@ -129,6 +156,38 @@ public class ARXDistributedResult {
      */
     public long getTimeAnonymize() {
         return timeAnonymize;
+    }
+
+    /**
+     * Returns the time needed for step 2A of anonymization
+     * @return the timeAnonymize
+     */
+    public long getTimeStep2A() {
+        return timeStep2A;
+    }
+
+    /**
+     * Returns the time needed for step 2B of anonymization
+     * @return the timeAnonymize
+     */
+    public long getTimeStep2B() {
+        return timeStep2B;
+    }
+
+    /**
+     * Returns the time needed for step 3 of anonymization
+     * @return the timePostprocess
+     */
+    public double getTimeStep3() {
+        return timeStep3;
+    }
+
+    /**
+     * Returns the time needed for step timeQuality of anonymization
+     * @return the timePostprocess
+     */
+    public double getTimeQuality() {
+        return timeQuality;
     }
 
     /**

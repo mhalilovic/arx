@@ -145,7 +145,7 @@ public class Main {
         if (measureMemory) {
             out.write("Dataset;Config;Local;Sorted;Threads;Granularity;Memory\n");
         } else {
-            out.write("Dataset;Config;Local;Sorted;Threads;Granularity;Time;TimePrepare;TimeAnonymize;TimePostproces\n");
+            out.write("Dataset;Config;Local;Sorted;Threads;Granularity;Time;TimePrepare;TimeAnonymize;TimeStep2A;TimeStep2B;TimeStep3;TimeQuality;TimePostproces\n");
         }
         out.flush();
         
@@ -602,12 +602,12 @@ public class Main {
         for (BenchmarkConfiguration benchmark : configs) {
             benchmark_count++;
             System.out.println("Benchmark " + benchmark_count + "/" + configs.size());
-            for (int threads = 1; threads <= 12; threads++) {
+            for (int threads = 1; threads <= 8; threads++) {
                 System.out.println("Running with " + threads + " threads.");
                 run(benchmark, threads, false, true, out, measureMemory);
-                //if (!benchmark.getConfig(true, threads).isPrivacyModelSpecified(EDDifferentialPrivacy.class)) {
-                //    run(benchmark, threads, true, true, out, measureMemory);
-                //}
+                if (!benchmark.getConfig(true, threads).isPrivacyModelSpecified(EDDifferentialPrivacy.class)) {
+                    run(benchmark, threads, true, true, out, measureMemory);
+                }
             }
         }
         
@@ -640,8 +640,12 @@ public class Main {
         System.out.println("Config: " + benchmark.getDataName() + "." + benchmark.getName() + " local: " + local + (!measureMemory ? "" : " [MEMORY]"));
         
         double time = 0d;
-        double timeAnonymize = 0d;
         double timePrepare = 0d;
+        double timeAnonymize = 0d;
+        double timeStep2A = 0d;
+        double timeStep2B = 0d;
+        double timeStep3 = 0d;
+        double timeQuality = 0d;
         double timePostprocess = 0d;
         double granularity = 0d;
         long memory = 0;
@@ -671,22 +675,29 @@ public class Main {
                                                                                measureMemory);
             ARXDistributedResult result = anonymizer.anonymize(data, config);
             memory = result.getMaxMemoryConsumption();
-            
+
             // First two are warmup
             if (i >= WARMUP) {
-                // TODO: This is currently only an approximation, because it ignores suppressions in step 3
-                granularity += getAverage(result.getQuality().get("Granularity"));
+                granularity += getWeightedAverageForGranularities(result.getQuality().get("Granularity"), result.getQuality().get("NumRows"));
                 time += result.getTimePrepare() + result.getTimeAnonymize() + result.getTimePostprocess();
                 timePrepare += result.getTimePrepare();
                 timeAnonymize += result.getTimeAnonymize();
+                timeStep2A += result.getTimeStep2A();
+                timeStep2B += result.getTimeStep2B();
+                timeStep3 += result.getTimeStep3();
+                timeQuality += result.getTimeQuality();
                 timePostprocess += result.getTimePostprocess();
             }
         }
-        
+
         // Average
         time /= REPEAT-WARMUP;
         timePrepare /= REPEAT-WARMUP;
         timeAnonymize /= REPEAT-WARMUP;
+        timeStep2A /= REPEAT-WARMUP;
+        timeStep2B /= REPEAT-WARMUP;
+        timeStep3 /= REPEAT-WARMUP;
+        timeQuality /= REPEAT-WARMUP;
         timePostprocess /= REPEAT-WARMUP;
         granularity /= REPEAT-WARMUP;
         
@@ -703,6 +714,10 @@ public class Main {
             out.write(time + ";");
             out.write(timePrepare + ";");
             out.write(timeAnonymize + ";");
+            out.write(timeStep2A + ";");
+            out.write(timeStep2B + ";");
+            out.write(timeStep3 + ";");
+            out.write(timeQuality + ";");
             out.write(timePostprocess + "\n");
         }
         out.flush();
@@ -720,7 +735,17 @@ public class Main {
         }
         return result / (double)values.size();
     }
-    
+
+    private static double getWeightedAverageForGranularities(List<Double> values, List<Double> weights) {
+        double result = 0d;
+        double weightSum = 0d;
+        for (int i = 0; i<values.size(); i++) {
+            result += values.get(i) * weights.get(i);
+            weightSum += weights.get(i);
+        }
+        return result / weightSum;
+    }
+
     private static void playground() throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
 
         Data data = createData("adult");

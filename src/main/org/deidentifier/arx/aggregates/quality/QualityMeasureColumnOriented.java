@@ -221,11 +221,7 @@ public class QualityMeasureColumnOriented {
                 }
                 return function.aggregate(toArray(normalizedResult));
             } else {
-                double aggregated = function.aggregate(toArray(result));
-                double min = function.aggregate(toArray(minimum));
-                double max = function.aggregate(toArray(maximum));
-                //TODO: Why do we do this weird normalization here?
-                return (aggregated - min) / (max - min);
+                return function.aggregate(toArray(result));
             }
         } catch (Exception e) {
             // Fail silently

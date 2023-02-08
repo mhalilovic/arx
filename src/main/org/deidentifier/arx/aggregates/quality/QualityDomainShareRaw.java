@@ -38,7 +38,7 @@ public class QualityDomainShareRaw implements QualityDomainShare {
 
     /**
      * Creates a new instance
-     * @param hierarchies
+     * @param hierarchy
      * @param suppressedValue
      */
     public QualityDomainShareRaw(String[][] hierarchy, String suppressedValue) {
@@ -68,10 +68,9 @@ public class QualityDomainShareRaw implements QualityDomainShare {
         Map<String, Double> shares = new HashMap<>();
         
         // Level 0
-        double baseFraction = 1d / (double) hierarchy.length;
         for (int row = 0; row < hierarchy.length; row++) {
             String value = hierarchy[row][0];
-            shares.put(value, baseFraction);
+            shares.put(value, 0.0);
         }
         
         // For each generalization level
