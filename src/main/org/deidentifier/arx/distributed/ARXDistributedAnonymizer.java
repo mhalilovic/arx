@@ -254,12 +254,23 @@ public class ARXDistributedAnonymizer {
         timeAnonymize = System.currentTimeMillis() - timeAnonymize;
 
         long timeQuality = System.currentTimeMillis();
+
+        // Preparation for calculating loss:
+        QualityConfiguration configuration = new QualityConfiguration();
+        int[] indices = getIndicesOfQuasiIdentifiers(data.getHandle().getDefinition().getQuasiIdentifyingAttributes(), data.getHandle());
+        String[][][] hierarchies = getHierarchies(data.getHandle(), indices, configuration);
+        QualityDomainShare[] shares = getDomainShares(data.getHandle(), indices, hierarchies, configuration);
+        int suppressedData = getSuppressed(data.getHandle());
+        Groupify<TupleWrapper> groupifyData = getGroupify(data.getHandle(), indices);
+
         Map<String, List<Double>> qualityMetrics = new HashMap<>();
         for (DataHandle handle : handles) {
             StatisticsQuality quality = handle.getStatistics().getQualityStatistics();
             storeQuality(qualityMetrics, "AverageClassSize", quality.getAverageClassSize().getValue());
             storeQuality(qualityMetrics, "GeneralizationIntensity", quality.getGeneralizationIntensity().getArithmeticMean());
-            Double granularityLoss = calculateLossDirectly(data.getHandle(), handle);
+            double granularityLoss = calculateLossDirectly(data.getHandle(), handle, configuration, indices, hierarchies, shares, suppressedData, groupifyData);
+            //Double granularityLossOld = calculateLossDirectly(data.getHandle(), handle);
+            //System.out.println(granularityLoss + " ??? "+ granularityLossOld);
             // TODO: Fix bug described below
             // Following if-statement avoids a bug in calculation of granularity when each QI is fully suppressed
             if (Double.isNaN(granularityLoss)) {
@@ -285,6 +296,10 @@ public class ARXDistributedAnonymizer {
         // Done
         return new ARXDistributedResult(result, timePrepare, timeAnonymize, timeStep2A, timeStep2B, timeStep3, timeQuality, timePostprocess, qualityMetrics, maxMemory);
     }
+
+    QualityConfiguration configuration = new QualityConfiguration();
+
+
     private static double calculateLossDirectly(DataHandle input, DataHandle output) {
         QualityConfiguration configuration = new QualityConfiguration();
         int[] indices = getIndicesOfQuasiIdentifiers(input.getDefinition().getQuasiIdentifyingAttributes(), input);
@@ -294,6 +309,20 @@ public class ARXDistributedAnonymizer {
                 getSuppressed(input), getSuppressed(output), getGroupify(input, indices), getGroupify(output, indices), hierarchies, shares, indices, configuration);
         return qualityModelColumnOrientedLoss.evaluate().getGranularity();
     }
+
+    private static double calculateLossDirectly(DataHandle input,
+                                                DataHandle output,
+                                                QualityConfiguration configuration,
+                                                int[] indices,
+                                                String[][][] hierarchies,
+                                                QualityDomainShare[] shares,
+                                                int suppressedInput,
+                                                Groupify<TupleWrapper> groupifyInput) {
+        QualityModelColumnOrientedLoss qualityModelColumnOrientedLoss = new QualityModelColumnOrientedLoss(new WrappedBoolean(),new WrappedInteger(), 0, input, output,
+                suppressedInput, getSuppressed(output), groupifyInput, getGroupify(output, indices), hierarchies, shares, indices, configuration);
+        return qualityModelColumnOrientedLoss.evaluate().getGranularity();
+    }
+
 
     /**
      * TODO: Copied from StatisticsQuality
