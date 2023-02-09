@@ -260,15 +260,12 @@ public class ARXDistributedAnonymizer {
         int[] indices = getIndicesOfQuasiIdentifiers(data.getHandle().getDefinition().getQuasiIdentifyingAttributes(), data.getHandle());
         String[][][] hierarchies = getHierarchies(data.getHandle(), indices, configuration);
         QualityDomainShare[] shares = getDomainShares(data.getHandle(), indices, hierarchies, configuration);
-        int suppressedData = getSuppressed(data.getHandle());
-        Groupify<TupleWrapper> groupifyData = getGroupify(data.getHandle(), indices);
-
         Map<String, List<Double>> qualityMetrics = new HashMap<>();
         for (DataHandle handle : handles) {
             StatisticsQuality quality = handle.getStatistics().getQualityStatistics();
             storeQuality(qualityMetrics, "AverageClassSize", quality.getAverageClassSize().getValue());
             storeQuality(qualityMetrics, "GeneralizationIntensity", quality.getGeneralizationIntensity().getArithmeticMean());
-            double granularityLoss = calculateLossDirectly(data.getHandle(), handle, configuration, indices, hierarchies, shares, suppressedData, groupifyData);
+            double granularityLoss = calculateLossDirectly(handle, configuration, indices, hierarchies, shares);
             //Double granularityLossOld = calculateLossDirectly(data.getHandle(), handle);
             //System.out.println(granularityLoss + " ??? "+ granularityLossOld);
             // TODO: Fix bug described below
@@ -310,16 +307,13 @@ public class ARXDistributedAnonymizer {
         return qualityModelColumnOrientedLoss.evaluate().getGranularity();
     }
 
-    private static double calculateLossDirectly(DataHandle input,
-                                                DataHandle output,
+    static double calculateLossDirectly(DataHandle output,
                                                 QualityConfiguration configuration,
                                                 int[] indices,
                                                 String[][][] hierarchies,
-                                                QualityDomainShare[] shares,
-                                                int suppressedInput,
-                                                Groupify<TupleWrapper> groupifyInput) {
-        QualityModelColumnOrientedLoss qualityModelColumnOrientedLoss = new QualityModelColumnOrientedLoss(new WrappedBoolean(),new WrappedInteger(), 0, input, output,
-                suppressedInput, getSuppressed(output), groupifyInput, getGroupify(output, indices), hierarchies, shares, indices, configuration);
+                                                QualityDomainShare[] shares) {
+        QualityModelColumnOrientedLoss qualityModelColumnOrientedLoss = new QualityModelColumnOrientedLoss(new WrappedBoolean(),new WrappedInteger(), 0, null, output,
+                0, getSuppressed(output), null, getGroupify(output, indices), hierarchies, shares, indices, configuration);
         return qualityModelColumnOrientedLoss.evaluate().getGranularity();
     }
 
@@ -327,7 +321,7 @@ public class ARXDistributedAnonymizer {
     /**
      * TODO: Copied from StatisticsQuality
      */
-    private static int getSuppressed(DataHandle handle) {
+    static int getSuppressed(DataHandle handle) {
         int suppressed = 0;
         for (int row = 0; row < handle.getNumRows(); row++) {
             suppressed += handle.isOutlier(row) ? 1 : 0;
@@ -338,7 +332,7 @@ public class ARXDistributedAnonymizer {
     /**
      * TODO: Copied from StatisticsQuality
      */
-    private static Groupify<TupleWrapper> getGroupify(DataHandle handle, int[] indices) {
+    static Groupify<TupleWrapper> getGroupify(DataHandle handle, int[] indices) {
 
         // Prepare
         int capacity = handle.getNumRows() / 10;
@@ -358,7 +352,7 @@ public class ARXDistributedAnonymizer {
     /**
      * TODO: Copied from StatisticsQuality
      */
-    private static int[] getIndicesOfQuasiIdentifiers(Set<String> userdefined, DataHandle handle) {
+    static int[] getIndicesOfQuasiIdentifiers(Set<String> userdefined, DataHandle handle) {
         int[] result = new int[handle.getDefinition().getQuasiIdentifyingAttributes().size()];
         int index = 0;
         for (String qi : handle.getDefinition().getQuasiIdentifyingAttributes()) {
@@ -373,7 +367,7 @@ public class ARXDistributedAnonymizer {
     /**
      * TODO: Copied from StatisticsQuality
      */
-    private static String[][][] getHierarchies(DataHandle handle,
+    static String[][][] getHierarchies(DataHandle handle,
                                                int[] indices,
                                                QualityConfiguration config) {
 
@@ -436,7 +430,7 @@ public class ARXDistributedAnonymizer {
     /**
      * TODO: Copied from StatisticsQuality
      */
-    private static QualityDomainShare[] getDomainShares(DataHandle handle,
+    static QualityDomainShare[] getDomainShares(DataHandle handle,
                                                         int[] indices,
                                                         String[][][] hierarchies,
                                                         QualityConfiguration config) {
@@ -485,7 +479,7 @@ public class ARXDistributedAnonymizer {
      * @throws RollbackRequiredException 
      * @throws IOException 
      */
-    private List<Future<DataHandle>> getAnonymization(List<DataHandle> partitions,
+    List<Future<DataHandle>> getAnonymization(List<DataHandle> partitions,
                                                       ARXConfiguration config,
                                                       DistributionStrategy distributionStrategy2,
                                                       int[] transformation) throws IOException, RollbackRequiredException {
