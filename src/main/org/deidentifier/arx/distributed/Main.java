@@ -62,6 +62,7 @@ public class Main {
     /**
      * Loads a dataset from disk
      * @param dataset
+     * @param attribute
      * @return
      * @throws IOException
      */
@@ -85,11 +86,7 @@ public class Main {
         FilenameFilter hierarchyFilter = new FilenameFilter() {
             @Override
             public boolean accept(File dir, String name) {
-                if (name.matches(dataset + "_hierarchy_(.)+.csv")) {
-                    return true;
-                } else {
-                    return false;
-                }
+                return name.matches(dataset + "_hierarchy_(.)+.csv");
             }
         };
 
@@ -133,9 +130,13 @@ public class Main {
      * @throws ExecutionException
      */
     private static void benchmark(boolean measureMemory) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
-        
+
+        String resultFileName = "result.csv";
+        if (measureMemory) {
+            resultFileName = "result_memory.csv";
+        }
         // Prepare output file
-        BufferedWriter out = new BufferedWriter(new FileWriter(new File("result.csv")));
+        BufferedWriter out = new BufferedWriter(new FileWriter(resultFileName));
         if (measureMemory) {
             out.write("Dataset;Config;Local;Sorted;Threads;Granularity;Memory\n");
         } else {
@@ -160,7 +161,7 @@ public class Main {
                 return config;
             }
         });
-        
+
         configs.add(new BenchmarkConfiguration() {
             public String getName() {return "11-anonymity";}
             public String getDataName() {return "ihis";}
@@ -209,7 +210,7 @@ public class Main {
                 return config;
             }
         });
-        
+
         configs.add(new BenchmarkConfiguration() {
             public String getName() {return "entropy-3-diversity";}
             public String getDataName() {return "ihis";}
@@ -226,7 +227,7 @@ public class Main {
                 return config;
             }
         });
-        
+
         configs.add(new BenchmarkConfiguration() {
             public String getName() {return "entropy-5-diversity";}
             public String getDataName() {return "ihis";}
@@ -256,7 +257,7 @@ public class Main {
                 data.getDefinition().setAttributeType("EDUC", AttributeType.SENSITIVE_ATTRIBUTE);
                 return data;
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EqualDistanceTCloseness("EDUC", 0.2d));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -273,7 +274,7 @@ public class Main {
                 data.getDefinition().setAttributeType("EDUC", AttributeType.SENSITIVE_ATTRIBUTE);
                 return data;
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EqualDistanceTCloseness("EDUC", 0.5d));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -285,7 +286,7 @@ public class Main {
         // -------------------
         // GLOBAL DISTRIBUTION
         // -------------------
-        
+
         configs.add(new BenchmarkConfiguration() {
             public String getName() {return "0.2-equal-closeness (global distribution)";}
             public String getDataName() {return "ihis";}
@@ -295,16 +296,16 @@ public class Main {
                 return data;
             }
             public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
-                
+
                 // Variable
                 String VARIABLE = "EDUC";
-                
+
                 // Obtain global distribution
                 StatisticsFrequencyDistribution distribution;
                 DataHandle handle = getDataset().getHandle();
                 int column = handle.getColumnIndexOf(VARIABLE);
                 distribution = handle.getStatistics().getFrequencyDistribution(column);
-                
+
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EqualDistanceTCloseness(VARIABLE, 0.2d, distribution));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -312,7 +313,7 @@ public class Main {
                 return config;
             }
         });
-        
+
         configs.add(new BenchmarkConfiguration() {
             public String getName() {return "0.5-equal-closeness (global distribution)";}
             public String getDataName() {return "ihis";}
@@ -348,7 +349,7 @@ public class Main {
                 data.getDefinition().setAttributeType("EDUC", AttributeType.SENSITIVE_ATTRIBUTE);
                 return data;
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new DDisclosurePrivacy("EDUC", 1));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -365,7 +366,7 @@ public class Main {
                 data.getDefinition().setAttributeType("EDUC", AttributeType.SENSITIVE_ATTRIBUTE);
                 return data;
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new DDisclosurePrivacy("EDUC", 2));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -386,7 +387,7 @@ public class Main {
                 data.getDefinition().setAttributeType("EDUC", AttributeType.SENSITIVE_ATTRIBUTE);
                 return data;
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EnhancedBLikeness("EDUC", 1));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -403,7 +404,7 @@ public class Main {
                 data.getDefinition().setAttributeType("EDUC", AttributeType.SENSITIVE_ATTRIBUTE);
                 return data;
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EnhancedBLikeness("EDUC", 2));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -411,11 +412,11 @@ public class Main {
                 return config;
             }
         });
-        
+
         // -------------------
         // GLOBAL DISTRIBUTION
         // -------------------
-        
+
         configs.add(new BenchmarkConfiguration() {
             public String getName() {return "1-enhanced-likeness (global distribution)";}
             public String getDataName() {return "ihis";}
@@ -455,13 +456,13 @@ public class Main {
 
                 // Variable
                 String VARIABLE = "EDUC";
-                
+
                 // Obtain global distribution
                 StatisticsFrequencyDistribution distribution;
                 DataHandle handle = getDataset().getHandle();
                 int column = handle.getColumnIndexOf(VARIABLE);
                 distribution = handle.getStatistics().getFrequencyDistribution(column);
-                
+
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EnhancedBLikeness(VARIABLE, 2, distribution));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -476,7 +477,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new AverageReidentificationRisk(0.05d));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -491,7 +492,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new AverageReidentificationRisk(0.01d));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
@@ -507,7 +508,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
                 config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
@@ -525,7 +526,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
                 config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
@@ -543,7 +544,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
                 config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
@@ -561,7 +562,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
                 config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
@@ -579,7 +580,7 @@ public class Main {
             public Data getDataset() throws IOException {
                 return createData("ihis");
             }
-            public ARXConfiguration getConfig(boolean local, int threads) throws IOException {
+            public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
                 config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
@@ -673,7 +674,7 @@ public class Main {
             // First two are warmup
             if (i >= WARMUP) {
                 granularity += getWeightedAverageForGranularities(result.getQuality().get("Granularity"), result.getQuality().get("NumRows"));
-                time += result.getTimePrepare() + result.getTimeAnonymize() + result.getTimePostprocess();
+                time += result.getTimePrepare() + result.getTimeAnonymize() + result.getTimePostprocess() + result.getTimeQuality();
                 timePrepare += result.getTimePrepare();
                 timeAnonymize += result.getTimeAnonymize();
                 timeStep2A += result.getTimeStep2A();
@@ -730,6 +731,12 @@ public class Main {
         return result / (double)values.size();
     }
 
+    /**
+     * Returns the weighted average of the given values
+     * @param values
+     * @param weights
+     * @return
+     */
     private static double getWeightedAverageForGranularities(List<Double> values, List<Double> weights) {
         double result = 0d;
         double weightSum = 0d;
