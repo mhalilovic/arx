@@ -27,9 +27,8 @@ import java.util.concurrent.TimeUnit;
  * @author Fabian Prasser
  */
 public class MemoryTracker {
-    
-    /** Delay and period in milliseconds*/
-    private long DELAY = 1000L;
+
+    private long numberOfMemoryMeasurements;
     
     /** Max bytes used*/
     private long maxBytesUsed = 0;
@@ -40,14 +39,15 @@ public class MemoryTracker {
     /**
      * Creates a new instance
      */
-    public MemoryTracker() {
+    public MemoryTracker(long delay) {
         service = Executors.newScheduledThreadPool(1);
-        service.scheduleAtFixedRate(new Runnable() {
+        service.scheduleWithFixedDelay(new Runnable() {
             @Override
             public void run() {
                 maxBytesUsed = Math.max(maxBytesUsed, getUsedBytes());
+                numberOfMemoryMeasurements += 1;
             }
-        }, DELAY, DELAY, TimeUnit.MILLISECONDS);
+        }, delay, delay, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -88,5 +88,9 @@ public class MemoryTracker {
     public long getMaxBytesUsed() {
         service.shutdown();
         return this.maxBytesUsed;
+    }
+
+    public long getNumberOfMemoryMeasurements() {
+        return numberOfMemoryMeasurements;
     }
 }

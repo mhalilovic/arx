@@ -137,14 +137,15 @@ public class ARXDistributedAnonymizer {
      * @throws InterruptedException 
      */
     public ARXDistributedResult anonymize(Data data, 
-                                          ARXConfiguration config) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
-        
+                                          ARXConfiguration config, long delay) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
+        long timeComplete = System.currentTimeMillis();
+
         // Track memory consumption
         MemoryTracker memoryTracker = null;
         if (trackMemoryConsumption) {
-            memoryTracker = new MemoryTracker();
+            memoryTracker = new MemoryTracker(delay);
         }
-        
+
         // Store definition
         DataDefinition definition = data.getDefinition().clone();
         
@@ -175,28 +176,29 @@ public class ARXDistributedAnonymizer {
         // #########################################
         // STEP 2: ANONYMIZATION
         // #########################################
-        
+
         // Start time measurement
-        long timeAnonymize = System.currentTimeMillis();
-        
+        long timeAnon = System.currentTimeMillis();
+        long timeGlobalTransform = 0L;
+
         // ##########################################
         // STEP 2a: IF GLOBAL, RETRIEVE COMMON SCHEME
         // ##########################################
-        
         // Global transformation
         int[] transformation = null;
         if (!config.isPrivacyModelSpecified(EDDifferentialPrivacy.class) &&
             transformationStrategy != TransformationStrategy.LOCAL) {
-            transformation = getTransformation(partitions, 
-                                               config,
-                                               distributionStrategy, 
-                                               transformationStrategy);
+            List<int[]> transformations = getTransformations(partitions,
+                    config,
+                    distributionStrategy);
+            timeAnon = System.currentTimeMillis() - timeAnon;
+            timeGlobalTransform = System.currentTimeMillis();
+            transformation = getCommonScheme(transformations, transformationStrategy);
         }
         
         // ###############################################
         // STEP 2b: PERFORM LOCAL OR GLOBAL TRANSFORMATION
         // ###############################################
-        long timeStep2A = System.currentTimeMillis();
 
         // Anonymize
         List<Future<DataHandle>> futures = getAnonymization(partitions, 
@@ -206,14 +208,21 @@ public class ARXDistributedAnonymizer {
         
         // Wait for execution
         List<DataHandle> handles = getResults(futures);
+        if (timeGlobalTransform == 0L) {
+            timeAnon = System.currentTimeMillis() - timeAnon;
+        } else {
+            timeGlobalTransform = System.currentTimeMillis() - timeGlobalTransform;
+        }
+
 
         // ###############################################
         // STEP 3: HANDLE NON-MONOTONIC SETTINGS
         // ###############################################
-        long timeStep2B = System.currentTimeMillis();
+        long timeSuppress;
+        long timePartitionByClass = System.currentTimeMillis();
+
         if (!config.isPrivacyModelSpecified(EDDifferentialPrivacy.class) &&
              config.getMonotonicityOfPrivacy() != Monotonicity.FULL) {
-            
             // Prepare merged dataset
             ARXDistributedResult mergedResult = new ARXDistributedResult(ARXPartition.getData(handles));
             Data merged = ARXPartition.getData(mergedResult.getOutput());
@@ -223,7 +232,10 @@ public class ARXDistributedAnonymizer {
             // within equivalence classes to exactly one partition
             // Also removes all hierarchies
             partitions = ARXPartition.getPartitionsByClass(merged, nodes);
-            
+
+            timePartitionByClass = System.currentTimeMillis() - timePartitionByClass;
+            timeSuppress = System.currentTimeMillis();
+
             // Fix transformation scheme: all zero
             config = config.clone();
             config.setSuppressionLimit(1d);
@@ -234,15 +246,18 @@ public class ARXDistributedAnonymizer {
             
             // Wait for execution
             handles = getResults(futures);
+            timeSuppress = System.currentTimeMillis() - timeSuppress;
+
+        } else {
+            timePartitionByClass = 0L;
+            timeSuppress = 0L;
         }
-        long timeStep3 = System.currentTimeMillis() - timeStep2B;
-        timeStep2B = timeStep2B - timeStep2A;
-        timeStep2A = timeStep2A - timeAnonymize;
         // ###############################################
         // STEP 4: FINALIZE
         // ###############################################
         
-        timeAnonymize = System.currentTimeMillis() - timeAnonymize;
+        timeComplete = System.currentTimeMillis() - timeComplete;
+
 
         long timeQuality = System.currentTimeMillis();
 
@@ -272,12 +287,14 @@ public class ARXDistributedAnonymizer {
         
         // Track memory consumption
         long maxMemory = Long.MIN_VALUE;
+        long numberOfMemoryMeasurements = 0;
         if (trackMemoryConsumption) {
             maxMemory = memoryTracker.getMaxBytesUsed();
+            numberOfMemoryMeasurements = memoryTracker.getNumberOfMemoryMeasurements();
         }
         
         // Done
-        return new ARXDistributedResult(result, timePrepare, timeAnonymize, timeStep2A, timeStep2B, timeStep3, timeQuality, timePostprocess, qualityMetrics, maxMemory);
+        return new ARXDistributedResult(result, timePrepare, timeComplete, timeAnon, timeGlobalTransform, timePartitionByClass, timeSuppress, timeQuality, timePostprocess, qualityMetrics, maxMemory, numberOfMemoryMeasurements);
     }
 
     /**
@@ -354,17 +371,17 @@ public class ARXDistributedAnonymizer {
     }
     
     /**
-     * Retrieves the transformation scheme using the current strategy
+     * Retrieves the transformations for all partitions
+     *
      * @param partitions
      * @param config
      * @param distributionStrategy
-     * @param transformationStrategy
      * @return
      * @throws IOException
      * @throws InterruptedException
      * @throws ExecutionException
      */
-    private int[] getTransformation(List<DataHandle> partitions, ARXConfiguration config, DistributionStrategy distributionStrategy, TransformationStrategy transformationStrategy) throws IOException, InterruptedException, ExecutionException {
+    private List<int[]> getTransformations(List<DataHandle> partitions, ARXConfiguration config, DistributionStrategy distributionStrategy) throws IOException, InterruptedException, ExecutionException {
         
         // Calculate schemes
         List<Future<int[]>> futures = new ArrayList<>();
@@ -376,12 +393,18 @@ public class ARXDistributedAnonymizer {
             default:
                 throw new IllegalStateException("Unknown distribution strategy");
             }
-            
         }
 
         // Collect schemes
-        List<int[]> schemes = getResults(futures);
-        
+        return getResults(futures);
+    }
+
+    /**
+     * Retrieves the common transformation scheme using all the schemes
+     * @param schemes
+     * @param transformationStrategy
+     */
+    private int[] getCommonScheme(List<int[]> schemes, TransformationStrategy transformationStrategy) {
         // Apply strategy
         switch (transformationStrategy) {
             case GLOBAL_AVERAGE:

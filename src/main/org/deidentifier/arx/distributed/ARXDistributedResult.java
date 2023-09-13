@@ -32,14 +32,17 @@ public class ARXDistributedResult {
     private Data                      data;
     /** Timing */
     private long                      timePrepare;
+
+    private long                      timeComplete;
     /** Timing */
     private long                      timeAnonymize;
     /** Timing */
-    private long                      timeStep2A;
+    private long                      timeGlobalTransform;
     /** Timing */
-    private long                      timeStep2B;
-    /** Timing */
-    private long                      timeStep3;
+    private long                      timePartitionByClass;
+
+    private long                      timeSuppress;
+
     /** Timing */
     private long                      timeQuality;
     /** Timing */
@@ -47,13 +50,15 @@ public class ARXDistributedResult {
     /** Max memory consumption */
     private long                      maxMemoryConsumption = Long.MIN_VALUE;
 
+    private long                      numberOfMemoryMeasurements;
+
     /**
      * Creates a new instance
      * 
      * @param data
      */
     public ARXDistributedResult(Data data) {
-        this(data, 0, 0, 0, 0, 0, 0, 0,null, Long.MIN_VALUE);
+        this(data, 0, 0, 0,  0, 0, 0, 0, 0,null, Long.MIN_VALUE, 0);
     }
 
     /**
@@ -61,31 +66,26 @@ public class ARXDistributedResult {
      * @param data
      * @param timePrepare
      * @param timeAnonymize
-     * @param timeStep2A
-     * @param timeStep2B
-     * @param timeStep3
      * @param timeQuality
      * @param timePostprocess
      */
-    public ARXDistributedResult(Data data, 
-                                long timePrepare, 
+    public ARXDistributedResult(Data data,
+                                long timePrepare,
+                                long timeComplete,
                                 long timeAnonymize,
-                                long timeStep2A,
-                                long timeStep2B,
-                                long timeStep3,
+                                long timeGlobalTransform,
+                                long timePartitionByClass,
+                                long timeSuppress,
                                 long timeQuality,
                                 long timePostprocess) {
-        this(data, timePrepare, timeAnonymize, timeStep2A, timeStep2B, timeStep3, timeQuality, timePostprocess, null, Long.MIN_VALUE);
+        this(data, timePrepare, timeComplete, timeAnonymize, timeGlobalTransform, timePartitionByClass, timeSuppress, timeQuality, timePostprocess, null, Long.MIN_VALUE, 0);
     }
 
     /**
      * Creates a new instance
      * @param data
      * @param timePrepare
-     * @param timeAnonymize
-     * @param timeStep2A
-     * @param timeStep2B
-     * @param timeStep3
+     * @param timeComplete
      * @param timeQuality
      * @param timePostprocess
      * @param qualityMetrics
@@ -93,35 +93,37 @@ public class ARXDistributedResult {
      */
     public ARXDistributedResult(Data data, 
                                 long timePrepare, 
-                                long timeAnonymize,
-                                long timeStep2A,
-                                long timeStep2B,
-                                long timeStep3,
+                                long timeComplete,
+                                long timeAnon,
+                                long timeGlobalTransform,
+                                long timePartitionByClass,
+                                long timeSuppress,
                                 long timeQuality,
                                 long timePostprocess,
                                 Map<String, List<Double>> qualityMetrics,
-                                long maxMemoryConsumption) {
+                                long maxMemoryConsumption,
+                                long numberOfMemoryMeasurements) {
         
         // Store
         this.timePrepare = timePrepare;
-        this.timeAnonymize = timeAnonymize;
-        this.timeStep2A = timeStep2A;
-        this.timeStep2B = timeStep2B;
-        this.timeStep3 = timeStep3;
+        this.timeComplete = timeComplete;
+        this.timeAnonymize = timeAnon;
+        this.timeGlobalTransform = timeGlobalTransform;
+        this.timePartitionByClass = timePartitionByClass;
+        this.timeSuppress = timeSuppress;
         this.timeQuality = timeQuality;
         this.timePostprocess = timePostprocess;
         this.maxMemoryConsumption = maxMemoryConsumption;
+        this.numberOfMemoryMeasurements = numberOfMemoryMeasurements;
         this.data = data;
         
         // Collect statistics
         if (qualityMetrics != null) {
             this.qualityMetrics.putAll(qualityMetrics);
         }
-        
-        // Done
-        timePostprocess = System.currentTimeMillis() - timePostprocess;
     }
-    
+
+
     /**
      * Returns the maximum memory consumed in bytes
      * @return the max memory consumed in bytes
@@ -150,8 +152,17 @@ public class ARXDistributedResult {
         return qualityMetrics;
     }
 
+
     /**
-     * Returns the time needed for anonymization
+     * Returns the time needed for complete anonymization
+     * @return the timeAnonymize
+     */
+    public long getTimeComplete() {
+        return timeComplete;
+    }
+
+    /**
+     * Returns the time needed for first anonymization step
      * @return the timeAnonymize
      */
     public long getTimeAnonymize() {
@@ -159,27 +170,27 @@ public class ARXDistributedResult {
     }
 
     /**
-     * Returns the time needed for step 2A of anonymization
+     * Returns the time needed for global transformation step
      * @return the timeAnonymize
      */
-    public long getTimeStep2A() {
-        return timeStep2A;
+    public long getTimeGlobalTransform() {
+        return timeGlobalTransform;
     }
 
     /**
-     * Returns the time needed for step 2B of anonymization
+     * Returns the time needed for partition by class step
      * @return the timeAnonymize
      */
-    public long getTimeStep2B() {
-        return timeStep2B;
+    public long getTimePartitionByClass() {
+        return timePartitionByClass;
     }
 
     /**
-     * Returns the time needed for step 3 of anonymization
-     * @return the timePostprocess
+     * Returns the time needed for anonymization with suppression step
+     * @return the timeAnonymize
      */
-    public double getTimeStep3() {
-        return timeStep3;
+    public long getTimeSuppress() {
+        return timeSuppress;
     }
 
     /**
@@ -212,5 +223,9 @@ public class ARXDistributedResult {
      */
     public boolean isMaxMemoryAvailable() {
         return maxMemoryConsumption != Long.MIN_VALUE;
+    }
+
+    public long getNumberOfMemoryMeasurements() {
+        return numberOfMemoryMeasurements;
     }
 }
