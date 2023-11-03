@@ -132,8 +132,8 @@ public class ARXDistributedAnonymizer {
      * @param config The privacy config
      * @return ARXResult
      * @throws IOException
-     * @throws RollbackRequiredException 
-     * @throws ExecutionException 
+     * @throws RollbackRequiredException
+     * @throws ExecutionException
      * @throws InterruptedException 
      */
     public ARXDistributedResult anonymize(Data data, 
@@ -150,10 +150,11 @@ public class ARXDistributedAnonymizer {
         DataDefinition definition = data.getDefinition().clone();
         
         // Sanity check
-        if (data.getHandle().getNumRows() < 2) {
+        int numRows = data.getHandle().getNumRows();
+        if (numRows < 2) {
             throw new IllegalArgumentException("Dataset must contain at least two rows");
         }
-        if (data.getHandle().getNumRows() < nodes) {
+        if (numRows < nodes) {
             throw new IllegalArgumentException("Dataset must contain at least as many records as nodes");
         }
         
@@ -170,6 +171,8 @@ public class ARXDistributedAnonymizer {
         case SORTED:
             partitions = ARXPartition.getPartitionsSorted(data, this.nodes);
             break;
+        default:
+            throw new RuntimeException("No partition strategy specified!");
         }
         timePrepare = System.currentTimeMillis() - timePrepare;
         
@@ -255,7 +258,7 @@ public class ARXDistributedAnonymizer {
         // ###############################################
         // STEP 4: FINALIZE
         // ###############################################
-        
+        System.out.println("Finalizing anonymization!");
         timeComplete = System.currentTimeMillis() - timeComplete;
 
 
@@ -267,16 +270,18 @@ public class ARXDistributedAnonymizer {
         String[][][] hierarchies = getHierarchies(data.getHandle(), indices, configuration);
         QualityDomainShare[] shares = getDomainShares(data.getHandle(), indices, hierarchies, configuration);
         Map<String, List<Double>> qualityMetrics = new HashMap<>();
-        for (DataHandle handle : handles) {
-            double granularityLoss = calculateLossDirectly(handle, configuration, indices, hierarchies, shares);
-            // TODO: Fix bug described below
+
+        List<Double> granularityLosses = GranularityCalculation.calculateGranularityLosses(handles, configuration, indices, hierarchies, shares);
+        for (int i = 0; i < handles.size(); i++) {
+            double granularityLoss = granularityLosses.get(i);
+
             // Following if-statement avoids a bug in calculation of granularity when each QI is fully suppressed
             if (Double.isNaN(granularityLoss)) {
                 storeQuality(qualityMetrics, "Granularity", 0.0d);
             } else {
                 storeQuality(qualityMetrics, "Granularity", granularityLoss);
             }
-            storeQuality(qualityMetrics, "NumRows", handle.getNumRows());
+            storeQuality(qualityMetrics, "NumRows", handles.get(i).getNumRows());
         }
         timeQuality = System.currentTimeMillis() - timeQuality;
 
@@ -292,7 +297,9 @@ public class ARXDistributedAnonymizer {
             maxMemory = memoryTracker.getMaxBytesUsed();
             numberOfMemoryMeasurements = memoryTracker.getNumberOfMemoryMeasurements();
         }
-        
+
+        partitions.clear();
+
         // Done
         return new ARXDistributedResult(result, timePrepare, timeComplete, timeAnon, timeGlobalTransform, timePartitionByClass, timeSuppress, timeQuality, timePostprocess, qualityMetrics, maxMemory, numberOfMemoryMeasurements);
     }
@@ -341,7 +348,6 @@ public class ARXDistributedAnonymizer {
                 throw new IllegalStateException("Unknown distribution strategy");
             }
         }
-        
         // Done
         return futures;
     }

@@ -9,9 +9,10 @@ import org.deidentifier.arx.common.TupleWrapper;
 import org.deidentifier.arx.common.WrappedBoolean;
 import org.deidentifier.arx.common.WrappedInteger;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class GranularityCalculation {
 
@@ -44,7 +45,7 @@ public class GranularityCalculation {
         // Prepare
         int capacity = handle.getNumRows() / 10;
         capacity = Math.max(capacity, 10);
-        Groupify<TupleWrapper> groupify = new Groupify<TupleWrapper>(capacity);
+        Groupify<TupleWrapper> groupify = new Groupify<>(capacity);
         int numRows = handle.getNumRows();
         for (int row = 0; row < numRows; row++) {
             if (!handle.isOutlier(row)) {
@@ -176,4 +177,86 @@ public class GranularityCalculation {
         return shares;
     }
 
+    /**
+     * Calculates granularity losses for a list of data handles.
+     *
+     * @param handles The list of data handles to be processed.
+     * @param configuration Quality configuration used for calculation.
+     * @param indices Array of indices of quasi identifying attributes.
+     * @param hierarchies Hierarchical data structures for granularity calculations.
+     * @param shares
+     * @return A list of calculated granularity losses for each data handle.
+     */
+    public static List<Double> calculateGranularityLosses(List<DataHandle> handles,
+                                                          QualityConfiguration configuration,
+                                                          int[] indices,
+                                                          String[][][] hierarchies,
+                                                          QualityDomainShare[] shares) {
+        List<Double> granularities = new ArrayList<>();
+        for (DataHandle handle : handles) {
+            granularities.add(calculateLossDirectly(handle, configuration, indices, hierarchies, shares));
+        }
+        return granularities;
+    }
+
+    /**
+     * Calculates granularity losses for a list of data handles concurrently.
+     *
+     * @param handles The list of data handles to be processed.
+     * @param configuration Quality configuration used for calculation.
+     * @param indices Array of indices of quasi identifying attributes.
+     * @param hierarchies Hierarchical data structures for granularity calculations.
+     * @param shares
+     * @return A list of calculated granularity losses for each data handle.
+     * @throws InterruptedException If the concurrent execution is interrupted.
+     * @throws ExecutionException If there's an error during concurrent execution.
+     */
+    public static List<Double> calculateGranularityLossesConcurrently(List<DataHandle> handles,
+                                                    QualityConfiguration configuration,
+                                                    int[] indices,
+                                                    String[][][] hierarchies,
+                                                    QualityDomainShare[] shares)
+            throws InterruptedException, ExecutionException {
+
+        List<Future<Double>> futures = new ArrayList<>();
+        for (DataHandle handle : handles) {
+            UtilityCalculationWorker worker = new UtilityCalculationWorker(handle, configuration, indices, hierarchies, shares);
+            futures.add(Executors.newCachedThreadPool().submit(worker));
+        }
+        return getResults(futures);
+    }
+
+    /**
+     * Fetches the results from a list of futures.
+     *
+     * @param <T> Type of the result fetched from the future.
+     * @param futures List of futures to fetch results from.
+     * @return A list containing results from the provided futures.
+     * @throws InterruptedException If the fetching process is interrupted.
+     * @throws ExecutionException If there's an error during fetching.
+     */
+    public static <T> List<T> getResults(List<Future<T>> futures) throws InterruptedException, ExecutionException {
+        List<T> results = new ArrayList<>();
+        for (Future<T> future : futures) {
+            results.add(future.get());
+        }
+        return results;
+    }
+
+    /**
+     * Returns the weighted average of the given values based on the provided weights.
+     *
+     * @param values List of values to compute the weighted average from.
+     * @param weights Corresponding weights for the given values.
+     * @return The calculated weighted average.
+     */
+    public static double getWeightedAverageForGranularities(List<Double> values, List<Double> weights) {
+        double result = 0d;
+        double weightSum = 0d;
+        for (int i = 0; i<values.size(); i++) {
+            result += values.get(i) * weights.get(i);
+            weightSum += weights.get(i);
+        }
+        return result / weightSum;
+    }
 }

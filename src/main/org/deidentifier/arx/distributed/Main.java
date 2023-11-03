@@ -39,6 +39,8 @@ import org.deidentifier.arx.exceptions.RollbackRequiredException;
 import org.deidentifier.arx.io.CSVHierarchyInput;
 import org.deidentifier.arx.metric.Metric;
 
+import static org.deidentifier.arx.distributed.GranularityCalculation.getWeightedAverageForGranularities;
+
 /**
  * Example
  *
@@ -46,9 +48,9 @@ import org.deidentifier.arx.metric.Metric;
  */
 public class Main {
 
-    private static final int MAX_THREADS = 3;
+    private static final int MAX_THREADS = 64;
 
-    private static final boolean AGGREGATION = true;
+    private static final boolean AGGREGATION = false;
 
     private static abstract class BenchmarkConfiguration {
         protected final String datasetName;
@@ -60,8 +62,20 @@ public class Main {
             this.sensitiveAttribute = sensitiveAttribute;
         }
 
-        public Data getDataset(int numVariations) throws IOException {
-            Data data = createData(datasetName, numVariations);
+        public Data loadDataset(int numVariations) throws IOException {
+            String dataset = datasetName;
+            if (numVariations > 0) {
+                dataset = datasetName + "-enlarged-" + numVariations;
+                File file = new File("data/" + dataset + ".csv");
+                if (file.exists()) {
+                    System.out.println("Using dataset " + dataset);
+                } else {
+                    String pathToDataset = "data/" + datasetName + ".csv";
+                    GenerateTestData.createVariations(pathToDataset, pathToDataset.replace(".csv", "-enlarged-" + numVariations + ".csv"), numVariations);
+                    System.out.println("Generated dataset " + dataset);
+                }
+            }
+            Data data = createData(datasetName, dataset);
             if (sensitiveAttribute != null) {
                 data.getDefinition().setAttributeType(sensitiveAttribute, AttributeType.SENSITIVE_ATTRIBUTE);
             }
@@ -126,25 +140,9 @@ public class Main {
                 if (AGGREGATION) {
                     data.getDefinition().setMicroAggregationFunction(attributeName, AttributeType.MicroAggregationFunction.createSet(), true);
                 }
-                //TODO: data.getDefinition().setMicroAggregationFunction(attributeName, AttributeType.MicroAggregationFunction.createSet(), true);
             }
         }
         return data;
-    }
-
-    /**
-     * Loads a dataset from disk
-     * @param dataset
-     * @return
-     * @throws IOException
-     */
-    public static Data createData(final String dataset, int numberOfEnlargements) throws IOException {
-        if (numberOfEnlargements < 1) {
-            return createData(dataset);
-        }
-        // writes
-        CSVVariations.createVariations("data/" + dataset + ".csv", numberOfEnlargements);
-        return createData(dataset, dataset + "-enlarged-" + numberOfEnlargements);
     }
 
     /**
@@ -157,17 +155,31 @@ public class Main {
      * @throws InterruptedException 
      */
     public static void main(String[] args) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
-        //playground();
-        // Running multiple benchmarks will overwrite results from previous runs!
+        System.out.println("Running multiple benchmarks overwrites results from previous runs!");
         System.out.println("You can pass following four required arguments: measureMemory?, testScalability?, datasetName, sensitiveAttribute");
         if (args.length >= 4) {
+            if (args.length > 4 && args[4].equalsIgnoreCase("true")) {
+                int[] variationsCounts = {
+                        5000000, 7500000, 10000000, 12500000, 15000000, 17500000, 20000000, 22500000, 25000000, // 2.5 million steps until 25 million
+                        35000000,
+                        45000000,
+                        55000000,
+                        65000000,
+                        75000000,
+                        85000000
+                };
+
+                GenerateTestData.createExperimentData("data/adult.csv", variationsCounts);
+            }
+
             benchmark(Boolean.parseBoolean(args[0]), Boolean.parseBoolean(args[1]), args[2], args[3]);
+
+
 
         } else {
             System.out.println("Using default: false, false, adult, education");
-            benchmark(false, false, "adult", "education");
+            benchmark(false, true, "adult", "education");
         }
-        //benchmark(false, "ihis", "EDUC");
 
     }
     
@@ -194,41 +206,236 @@ public class Main {
         }
 
         out.flush();
+
+        //List<BenchmarkConfiguration> configs = getConfigs(datasetName, sensitiveAttribute);
+        //List<BenchmarkConfiguration> configs = getNewConfigs(datasetName, sensitiveAttribute);
+        List<BenchmarkConfiguration> configs = getConfigs(datasetName, sensitiveAttribute);
+
+
+        if (testScalability) {
+            configs = getScalabilityConfigs(datasetName, sensitiveAttribute);
+        }
+
+
+        // Configs
+        System.out.println("Using " + configs.size() + " benchmark configs.");
+        int benchmark_count = 0;
+        for (BenchmarkConfiguration benchmark : configs) {
+            benchmark_count++;
+            if (testScalability) {
+                System.out.println("Benchmark " + benchmark_count + "/" + configs.size());
+                int[] threadCounts = {1,2,12,64};
+
+                int[] variationsCounts = {
+                        5000000, 7500000, 10000000, 12500000, 15000000, 17500000, 20000000, 22500000, 25000000, // 2.5 million steps until 25 million
+                        35000000,
+                        45000000,
+                        55000000,
+                        65000000,
+                        75000000,
+                        85000000
+                };
+                for (int threads : threadCounts) {
+                    for (int numVariations : variationsCounts) {
+                        System.out.println("Running with " + threads + " threads.");
+                        run(benchmark, threads, false, true, out, measureMemory, numVariations);
+                        run(benchmark, threads, true, true, out, measureMemory, numVariations);
+                    }
+                }
+            } else {
+                System.out.println("Benchmark " + benchmark_count + "/" + configs.size());
+                for (int threads = 1; threads <= MAX_THREADS; threads++) {
+                    System.out.println("Running with " + threads + " threads.");
+                    run(benchmark, threads, false, true, out, measureMemory, 0);
+                    run(benchmark, threads, true, true, out, measureMemory, 0);
+                }
+            }
+        }
         
+        // Done
+        out.close();
+    }
+
+    /**
+     * Run benchmark
+     * @param threads 
+     * @param local
+     * @param sorted
+     * @param out
+     * @param measureMemory
+     * @throws ExecutionException 
+     * @throws InterruptedException 
+     * @throws RollbackRequiredException 
+     * @throws IOException 
+     */
+    private static void run(BenchmarkConfiguration benchmark,
+                            int threads,
+                            boolean local,
+                            boolean sorted,
+                            BufferedWriter out,
+                            boolean measureMemory,
+                            int numVariations) throws IOException,
+                                                RollbackRequiredException,
+                                                InterruptedException,
+                                                ExecutionException {
+        
+        System.out.println("Config: " + benchmark.getDataName() + "." + benchmark.getName() + " local: " + local + (!measureMemory ? "" : " [MEMORY]"));
+        
+        double time = 0d;
+        double timePrepare = 0d;
+        double timeComplete = 0d;
+        double timeAnonymize = 0d;
+        double timeGlobalTransform = 0d;
+        double timePartitionByClass = 0d;
+        double timeSuppress = 0d;
+        double timeQuality = 0d;
+        double timePostprocess = 0d;
+        double granularity = 0d;
+        long memory = 0;
+        long numberOfMemoryMeasurements = 0;
+        long tempMemory = 0; // to store current run
+        long tempNumberOfMemoryMeasurements = 0; // to store current run
+
+        long delay = 1000L;
+        int REPEAT = 5;
+        int WARMUP = 1;
+        if (measureMemory) {
+            REPEAT = 4;
+            WARMUP = 0;
+        }
+
+        // Repeat
+        for (int i = 0; i < REPEAT; i++) {
+            
+            // Report
+            System.out.println("- Run " + (i+1) + " of " + REPEAT);
+            
+            // Get
+            Data data;
+            data = benchmark.loadDataset(numVariations);
+            System.out.println("Dataset was loaded into memory.");
+
+            ARXConfiguration config = benchmark.getConfig(local, threads);
+            
+            // Anonymize
+            ARXDistributedAnonymizer anonymizer = new ARXDistributedAnonymizer(threads,
+                                                                               sorted ? PartitioningStrategy.SORTED : PartitioningStrategy.RANDOM, 
+                                                                               DistributionStrategy.LOCAL,
+                                                                               local ? TransformationStrategy.LOCAL : TransformationStrategy.GLOBAL_AVERAGE,
+                                                                               measureMemory);
+            ARXDistributedResult result = anonymizer.anonymize(data, config, delay);
+            System.out.println("Dataset was anonymized");
+            tempMemory = result.getMaxMemoryConsumption();
+            tempNumberOfMemoryMeasurements = result.getNumberOfMemoryMeasurements();
+            if (measureMemory && (tempNumberOfMemoryMeasurements < 20)) {
+                // With default delay of 1000L we might not measure anything, because anonymization runs too quick
+                // Ensure delay is small enough to get around 20 measurements during anonymization
+                delay = (long) Math.floor(result.getTimeAnonymize() * 0.046);
+
+                System.out.println("Rerunning with lower delay: " + delay);
+                result = anonymizer.anonymize(data, config, delay);
+                tempMemory = result.getMaxMemoryConsumption();
+                tempNumberOfMemoryMeasurements = result.getNumberOfMemoryMeasurements();
+                System.out.println("Memory: " + memory + " from " + tempNumberOfMemoryMeasurements + "measurements");
+            }
+            //result.getOutput().save("./" + benchmark.getName() + "_" + threads + "_" + local + ".csv");
+
+
+            // First two are warmup
+            if (i >= WARMUP) {
+                memory += tempMemory;
+                numberOfMemoryMeasurements += tempNumberOfMemoryMeasurements;
+                granularity += getWeightedAverageForGranularities(result.getQuality().get("Granularity"), result.getQuality().get("NumRows"));
+                time += result.getTimePrepare() + result.getTimeComplete() + result.getTimePostprocess() + result.getTimeQuality();
+                timePrepare += result.getTimePrepare();
+                timeComplete += result.getTimeComplete();
+                timeAnonymize += result.getTimeAnonymize();
+                timeGlobalTransform += result.getTimeGlobalTransform();
+                timePartitionByClass += result.getTimePartitionByClass();
+                timeSuppress += result.getTimeSuppress();
+                timeQuality += result.getTimeQuality();
+                timePostprocess += result.getTimePostprocess();
+            }
+        }
+
+        // Average
+        time /= REPEAT-WARMUP;
+        timePrepare /= REPEAT-WARMUP;
+        timeComplete /= REPEAT-WARMUP;
+        timeAnonymize /= REPEAT-WARMUP;
+        timeGlobalTransform /= REPEAT-WARMUP;
+        timePartitionByClass /= REPEAT-WARMUP;
+        timeSuppress /= REPEAT-WARMUP;
+        timeQuality /= REPEAT-WARMUP;
+        timePostprocess /= REPEAT-WARMUP;
+        granularity /= REPEAT-WARMUP;
+        memory /= REPEAT-WARMUP;
+        numberOfMemoryMeasurements /= REPEAT-WARMUP;
+
+        // Store
+        if (numVariations > 0) {
+            out.write(benchmark.getDataName() + "_" + numVariations + ";");
+        } else {
+            out.write(benchmark.getDataName() + ";");
+        }
+        out.write(benchmark.getName() + ";");
+        out.write(local + ";");
+        out.write(sorted + ";");
+        out.write(threads + ";");
+        out.write(granularity + ";");
+        if (measureMemory) {
+            out.write(memory + ";");
+            out.write(numberOfMemoryMeasurements + ";");
+            out.write("\n");
+        } else {
+            out.write(time + ";");
+            out.write(timePrepare + ";");
+            out.write(timeComplete + ";");
+            out.write(timeAnonymize + ";");
+            out.write(timeGlobalTransform + ";");
+            out.write(timePartitionByClass + ";");
+            out.write(timeSuppress + ";");
+            out.write(timeQuality + ";");
+            out.write(timePostprocess + "\n");
+        }
+        out.flush();
+    }
+
+
+    private static List<BenchmarkConfiguration> getScalabilityConfigs(String datasetName, String sensitiveAttribute) {
+        List<BenchmarkConfiguration> configs = new ArrayList<>();
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            public String getName() {return "50-anonymity";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                config.addPrivacyModel(new KAnonymity(50));
+                config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
+            }
+        });
+        return configs;
+    }
+
+
+    private static List<BenchmarkConfiguration> getNewConfigs(String datasetName, String sensitiveAttribute) {
         // Prepare configs
         List<BenchmarkConfiguration> configs = new ArrayList<>();
 
+
+        //// TODO: sampling fraction changes when partitions are used? same for significance
+        //// TODO: I do not fully understand it yet
         configs.add(new BenchmarkConfiguration(datasetName, null) {
             public String getName() {return "5-map";}
             public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 DataHandle handle = getDataset().getHandle();
+                //DataSubset subset = DataSubset.create(getDataset(), new HashSet<>(Arrays.asList(1, 2, 5, 7, 8)));
+
+                //DataHandle subset = getDataset().getHandle();
                 ARXPopulationModel populationModel = ARXPopulationModel.create(handle.getNumRows(), 0.01d);
                 config.addPrivacyModel(new KMap(5, 0.01, populationModel, KMap.CellSizeEstimator.POISSON));
-                config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
-                config.setSuppressionLimit(1d);
-                return config;
-            }
-        });
-
-        configs.add(new BenchmarkConfiguration(datasetName, null) {
-            public String getName() {return "sample-uniqueness";}
-            public ARXConfiguration getConfig(boolean local, int threads) {
-                ARXConfiguration config = ARXConfiguration.create();
-                DataHandle handle = getDataset().getHandle();
-                config.addPrivacyModel(new SampleUniqueness(0.3));
-                config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
-                config.setSuppressionLimit(1d);
-                return config;
-            }
-        });
-
-        configs.add(new BenchmarkConfiguration(datasetName, null) {
-            public String getName() {return "population-uniqueness";}
-            public ARXConfiguration getConfig(boolean local, int threads) {
-                ARXConfiguration config = ARXConfiguration.create();
-                DataHandle handle = getDataset().getHandle();
-                config.addPrivacyModel(new PopulationUniqueness(0.3, ARXPopulationModel.create(ARXPopulationModel.Region.USA)));
+                //config.addPrivacyModel(new KMap(5, subset));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
                 config.setSuppressionLimit(1d);
                 return config;
@@ -239,13 +446,18 @@ public class Main {
             public String getName() {return "profitability";}
             public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
-                DataHandle handle = getDataset().getHandle();
                 config.addPrivacyModel(new ProfitabilityProsecutor());
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
                 config.setSuppressionLimit(1d);
                 return config;
             }
         });
+        return configs;
+    }
+
+        private static List<BenchmarkConfiguration> getConfigs(String datasetName, String sensitiveAttribute) {
+        // Prepare configs
+        List<BenchmarkConfiguration> configs = new ArrayList<>();
 
         configs.add(new BenchmarkConfiguration(datasetName, null) {
             public String getName() {return "5-anonymity";}
@@ -302,46 +514,16 @@ public class Main {
             }
         });
 
-        configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
-            public String getName() {return "entropy-5-diversity";}
-            public ARXConfiguration getConfig(boolean local, int threads) {
-                ARXConfiguration config = ARXConfiguration.create();
-                config.addPrivacyModel(new EntropyLDiversity(this.sensitiveAttribute, 5));
-                config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
-                config.setSuppressionLimit(1d);
-                return config;
-            }
-        });
-
-        // -------------------
-        // LOCAL DISTRIBUTION
-        // -------------------
-
         //configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
-        //    public String getName() {return "0.2-equal-closeness";}
+        //    public String getName() {return "entropy-5-diversity";}
         //    public ARXConfiguration getConfig(boolean local, int threads) {
         //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EqualDistanceTCloseness(this.sensitiveAttribute, 0.2d));
+        //        config.addPrivacyModel(new EntropyLDiversity(this.sensitiveAttribute, 5));
         //        config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
         //        config.setSuppressionLimit(1d);
         //        return config;
         //    }
         //});
-//
-        //configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
-        //    public String getName() {return "0.5-equal-closeness";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EqualDistanceTCloseness(this.sensitiveAttribute, 0.5d));
-        //        config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-
-      // -------------------
-      // GLOBAL DISTRIBUTION
-      // -------------------
 
         configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
             public String getName() {return "0.2-equal-closeness (global distribution)";}
@@ -407,36 +589,6 @@ public class Main {
             }
         });
 
-        // -------------------
-        // LOCAL DISTRIBUTION
-        // -------------------
-
-        //configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
-        //    public String getName() {return "1-enhanced-likeness";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EnhancedBLikeness(this.sensitiveAttribute, 1));
-        //        config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-//
-        //configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
-        //    public String getName() {return "2-enhanced-likeness";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EnhancedBLikeness(this.sensitiveAttribute, 2));
-        //        config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-//
-        // -------------------
-        // GLOBAL DISTRIBUTION
-        // -------------------
-
         configs.add(new BenchmarkConfiguration(datasetName, sensitiveAttribute) {
             public String getName() {return "1-enhanced-likeness (global distribution)";}
             public ARXConfiguration getConfig(boolean local, int threads) {
@@ -501,255 +653,79 @@ public class Main {
             }
         });
 
-        //configs.add(new BenchmarkConfiguration(datasetName, null) {
-        //    final double EPSILON = 1d;
-        //    public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
-        //        config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
-        //        config.setHeuristicSearchStepLimit(300);
-        //        config.setQualityModel(Metric.createLossMetric(0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-//
-        //configs.add(new BenchmarkConfiguration(datasetName, null) {
-        //    final double EPSILON = 2d;
-        //    public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
-        //        config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
-        //        config.setHeuristicSearchStepLimit(300);
-        //        config.setQualityModel(Metric.createLossMetric(0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-//
-        //configs.add(new BenchmarkConfiguration(datasetName, null) {
-        //    final double EPSILON = 3d;
-        //    public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
-        //        config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
-        //        config.setHeuristicSearchStepLimit(300);
-        //        config.setQualityModel(Metric.createLossMetric(0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-//
-        //configs.add(new BenchmarkConfiguration(datasetName, null) {
-        //    final double EPSILON = 4d;
-        //    public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
-        //    public ARXConfiguration getConfig(boolean local, int threads) {
-        //        ARXConfiguration config = ARXConfiguration.create();
-        //        config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
-        //        config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
-        //        config.setHeuristicSearchStepLimit(300);
-        //        config.setQualityModel(Metric.createLossMetric(0.5d));
-        //        config.setSuppressionLimit(1d);
-        //        return config;
-        //    }
-        //});
-
-        // Configs
-        System.out.println("Using " + configs.size() + " benchmark configs.");
-        int benchmark_count = 0;
-        for (BenchmarkConfiguration benchmark : configs) {
-            benchmark_count++;
-            if (testScalability) {
-                int threads = MAX_THREADS;
-                System.out.println("Benchmark " + benchmark_count + "/" + configs.size());
-                for (int numVariations = 1; numVariations <= 50; numVariations += 5) {
-                    System.out.println("Running with " + numVariations + " number of enlargements.");
-                    run(benchmark, threads, false, true, out, measureMemory, numVariations);
-                    if (!benchmark.getConfig(true, threads).isPrivacyModelSpecified(EDDifferentialPrivacy.class)) {
-                        run(benchmark, threads, true, true, out, measureMemory, numVariations);
-                    }
-                }
-            } else {
-                System.out.println("Benchmark " + benchmark_count + "/" + configs.size());
-                for (int threads = 1; threads <= MAX_THREADS; threads++) {
-                    System.out.println("Running with " + threads + " threads.");
-                    run(benchmark, threads, false, true, out, measureMemory, 0);
-                    if (!benchmark.getConfig(true, threads).isPrivacyModelSpecified(EDDifferentialPrivacy.class)) {
-                        run(benchmark, threads, true, true, out, measureMemory, 0);
-                    }
-                }
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            public String getName() {return "0.01-sample-uniqueness";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                DataHandle handle = getDataset().getHandle();
+                config.addPrivacyModel(new SampleUniqueness(0.01));
+                config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
             }
-        }
-        
-        // Done
-        out.close();
+        });
+
+        return configs;
     }
-    
-    /**
-     * Run benchmark
-     * @param threads 
-     * @param local
-     * @param sorted
-     * @param out
-     * @param measureMemory
-     * @throws ExecutionException 
-     * @throws InterruptedException 
-     * @throws RollbackRequiredException 
-     * @throws IOException 
-     */
-    private static void run(BenchmarkConfiguration benchmark,
-                            int threads,
-                            boolean local,
-                            boolean sorted,
-                            BufferedWriter out,
-                            boolean measureMemory,
-                            int numVariations) throws IOException,
-                                                RollbackRequiredException,
-                                                InterruptedException,
-                                                ExecutionException {
-        
-        System.out.println("Config: " + benchmark.getDataName() + "." + benchmark.getName() + " local: " + local + (!measureMemory ? "" : " [MEMORY]"));
-        
-        double time = 0d;
-        double timePrepare = 0d;
-        double timeComplete = 0d;
-        double timeAnonymize = 0d;
-        double timeGlobalTransform = 0d;
-        double timePartitionByClass = 0d;
-        double timeSuppress = 0d;
-        double timeQuality = 0d;
-        double timePostprocess = 0d;
-        double granularity = 0d;
-        long memory = 0;
-        long numberOfMemoryMeasurements = 0;
-        long delay = 1000L;
-        int REPEAT = 5;
-        int WARMUP = 2;
-        if (measureMemory) {
-            REPEAT = 1;
-            WARMUP = 0;
-        }
 
-        // Repeat
-        for (int i = 0; i < REPEAT; i++) {
-            
-            // Report
-            System.out.println("- Run " + (i+1) + " of " + REPEAT);
-            
-            // Get
-            Data data;
-            data = benchmark.getDataset(numVariations);
+    private static List<BenchmarkConfiguration> getDifferentialPrivacyConfigs(String datasetName, String sensitiveAttribute) {
+        List<BenchmarkConfiguration> configs = new ArrayList<>();
 
-            ARXConfiguration config = benchmark.getConfig(local, threads);
-            
-            // Anonymize
-            ARXDistributedAnonymizer anonymizer = new ARXDistributedAnonymizer(threads,
-                                                                               sorted ? PartitioningStrategy.SORTED : PartitioningStrategy.RANDOM, 
-                                                                               DistributionStrategy.LOCAL,
-                                                                               local ? TransformationStrategy.LOCAL : TransformationStrategy.GLOBAL_AVERAGE,
-                                                                               measureMemory);
-            ARXDistributedResult result = anonymizer.anonymize(data, config, delay);
-            memory = result.getMaxMemoryConsumption();
-            numberOfMemoryMeasurements = result.getNumberOfMemoryMeasurements();
-            if (measureMemory && numberOfMemoryMeasurements < 20) {
-                // With default delay of 1000L we might not measure anything, because anonymization runs too quick
-                // Ensure delay is small enough to get around 20 measurements during anonymization
-                delay = (long) Math.floor(result.getTimeAnonymize() * 0.046);
-
-                System.out.println("Rerunning with lower delay: " + delay);
-                result = anonymizer.anonymize(data, config, delay);
-                memory = result.getMaxMemoryConsumption();
-                numberOfMemoryMeasurements = result.getNumberOfMemoryMeasurements();
-                System.out.println("Memory: " + memory + " from " + numberOfMemoryMeasurements + "measurements");
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            final double EPSILON = 1d;
+            public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
+                config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
+                config.setHeuristicSearchStepLimit(300);
+                config.setQualityModel(Metric.createLossMetric(0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
             }
-            result.getOutput().save("./" + benchmark.getName() + "_" + threads + "_" + local + ".csv");
+        });
 
-
-            // First two are warmup
-            if (i >= WARMUP) {
-                granularity += getWeightedAverageForGranularities(result.getQuality().get("Granularity"), result.getQuality().get("NumRows"));
-                time += result.getTimePrepare() + result.getTimeComplete() + result.getTimePostprocess() + result.getTimeQuality();
-                timePrepare += result.getTimePrepare();
-                timeComplete += result.getTimeComplete();
-                timeAnonymize += result.getTimeAnonymize();
-                timeGlobalTransform += result.getTimeGlobalTransform();
-                timePartitionByClass += result.getTimePartitionByClass();
-                timeSuppress += result.getTimeSuppress();
-                timeQuality += result.getTimeQuality();
-                timePostprocess += result.getTimePostprocess();
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            final double EPSILON = 2d;
+            public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
+                config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
+                config.setHeuristicSearchStepLimit(300);
+                config.setQualityModel(Metric.createLossMetric(0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
             }
-        }
+        });
 
-        // Average
-        time /= REPEAT-WARMUP;
-        timePrepare /= REPEAT-WARMUP;
-        timeComplete /= REPEAT-WARMUP;
-        timeAnonymize /= REPEAT-WARMUP;
-        timeGlobalTransform /= REPEAT-WARMUP;
-        timePartitionByClass /= REPEAT-WARMUP;
-        timeSuppress /= REPEAT-WARMUP;
-        timeQuality /= REPEAT-WARMUP;
-        timePostprocess /= REPEAT-WARMUP;
-        granularity /= REPEAT-WARMUP;
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            final double EPSILON = 3d;
+            public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
+                config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
+                config.setHeuristicSearchStepLimit(300);
+                config.setQualityModel(Metric.createLossMetric(0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
+            }
+        });
 
-        // Store
-        if (numVariations > 0) {
-            out.write(benchmark.getDataName() + "-enlarged-" + numVariations + ";");
-        } else {
-            out.write(benchmark.getDataName() + ";");
-        }
-        out.write(benchmark.getName() + ";");
-        out.write(local + ";");
-        out.write(sorted + ";");
-        out.write(threads + ";");
-        out.write(granularity + ";");
-        if (measureMemory) {
-            out.write(memory + ";");
-            out.write(numberOfMemoryMeasurements + "\n");
-        } else {
-            out.write(time + ";");
-            out.write(timePrepare + ";");
-            out.write(timeComplete + ";");
-            out.write(timeAnonymize + ";");
-            out.write(timeGlobalTransform + ";");
-            out.write(timePartitionByClass + ";");
-            out.write(timeSuppress + ";");
-            out.write(timeQuality + ";");
-            out.write(timePostprocess + "\n");
-        }
-        out.flush();
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            final double EPSILON = 4d;
+            public String getName() {return "(e10-6, "+EPSILON+")-differential privacy";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                config.addPrivacyModel(new EDDifferentialPrivacy(EPSILON / (double) threads, 0.000001d, null, true));
+                config.setDPSearchBudget(0.1d * (EPSILON / (double) threads));
+                config.setHeuristicSearchStepLimit(300);
+                config.setQualityModel(Metric.createLossMetric(0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
+            }
+        });
+        return configs;
     }
-
-    /**
-     * Returns the average of the given values
-     * @param values
-     * @return
-     */
-    private static double getAverage(List<Double> values) {
-        double result = 0d;
-        for (Double value : values) {
-            result += value;
-        }
-        return result / (double)values.size();
-    }
-
-    /**
-     * Returns the weighted average of the given values
-     * @param values
-     * @param weights
-     * @return
-     */
-    private static double getWeightedAverageForGranularities(List<Double> values, List<Double> weights) {
-        double result = 0d;
-        double weightSum = 0d;
-        for (int i = 0; i<values.size(); i++) {
-            result += values.get(i) * weights.get(i);
-            weightSum += weights.get(i);
-        }
-        return result / weightSum;
-    }
-
 }
