@@ -41,14 +41,14 @@ public class ARXWorkerLocal implements ARXWorker {
     private static final boolean DEBUG = false;
     
     @Override
-    public Future<DataHandle> anonymize(DataHandle partition,
+    public Future<DataHandle> anonymize(ARXPartition partition,
                                         ARXConfiguration config) throws IOException,
                                                                  RollbackRequiredException {
         return anonymize(partition, config, 0d);
     }
 
     @Override
-    public Future<DataHandle> anonymize(final DataHandle partition,
+    public Future<DataHandle> anonymize(final ARXPartition partition,
                                         final ARXConfiguration _config,
                                         final double recordsPerIteration) throws IOException, RollbackRequiredException {
         
@@ -70,14 +70,14 @@ public class ARXWorkerLocal implements ARXWorker {
                 
                 // Anonymize
                 ARXAnonymizer anonymizer = new ARXAnonymizer();
-                ARXResult result = anonymizer.anonymize(ARXPartition.getData(partition), config);
+                ARXResult result = anonymizer.anonymize(ARXPartition.getData(partition.getData()), config);
                 DataHandle handle = result.getOutput();
                 
                 if (!result.isResultAvailable()) {
                     
                     config.setSuppressionLimit(1d);
                     anonymizer = new ARXAnonymizer();
-                    result = anonymizer.anonymize(ARXPartition.getData(partition), config);
+                    result = anonymizer.anonymize(ARXPartition.getData(partition.getData()), config);
                     handle = result.getOutput();
                 }
                 
@@ -116,7 +116,7 @@ public class ARXWorkerLocal implements ARXWorker {
     }
 
     @Override
-    public Future<int[]> transform(DataHandle partition, ARXConfiguration _config) throws IOException {
+    public Future<int[]> transform(ARXPartition partition, ARXConfiguration _config) throws IOException {
         
         // Executor service
         ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -131,9 +131,8 @@ public class ARXWorkerLocal implements ARXWorker {
                 
                 // Anonymize
                 ARXAnonymizer anonymizer = new ARXAnonymizer();
-                ARXResult result = anonymizer.anonymize(ARXPartition.getData(partition), config);
+                ARXResult result = anonymizer.anonymize(ARXPartition.getData(partition.getData()), config);
                 int[] transformation = result.getGlobalOptimum().getTransformation();
-                
                 if (DEBUG) {
                     System.out.println("Anonymization");
                     System.out.println(" - Dataset size: " + result.getOutput().getNumRows());
