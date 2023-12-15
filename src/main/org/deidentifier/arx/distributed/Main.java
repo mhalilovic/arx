@@ -50,7 +50,7 @@ public class Main {
 
     private static final boolean AGGREGATION = false;
 
-    private static final Random random = new Random(93981238859L);
+    private static final Random random = new Random(3735928559L);
 
     private static abstract class BenchmarkConfiguration {
         protected final String datasetName;
@@ -157,7 +157,7 @@ public class Main {
     public static void main(String[] args) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
         System.out.println("Running multiple benchmarks overwrites results from previous runs!");
         System.out.println("You can pass following four required arguments: measureMemory?, testScalability?, datasetName, sensitiveAttribute");
-        ARXPartition.setRandomSeed(93981238859L);
+        ARXPartition.makeDeterministic(93981238859L);
         if (args.length >= 4) {
             if (args.length > 4 && args[4].equalsIgnoreCase("true")) {
                 int[] variationsCounts = {
@@ -424,6 +424,14 @@ public class Main {
         return configs;
     }
 
+    /**
+     * Generates a subset of m indices, from a list with indices ranging from 0 to N-1, and saves it to a file at filepath.
+     * If m > N throws a runtime exception.
+     * @param N N-1 is the max indices value
+     * @param m number of indices in the resulting file
+     * @param filePath path to the resulting file
+     * @throws IOException
+     */
     private static void generateSubset(int N, int m, String filePath) throws IOException {
         if (m > N) {
             throw new IllegalArgumentException("Sample size m cannot be greater than the range N");
@@ -445,6 +453,12 @@ public class Main {
         }
     }
 
+    /**
+     * Loads a subset from a file containing Integers.
+     * @param filePath path to the file containing Integers
+     * @return Set of Integers representing the subset
+     * @throws IOException
+     */
     private static Set<Integer> loaSubsetFromFile(String filePath) throws IOException {
         Set<Integer> indices = new HashSet<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {

@@ -27,7 +27,7 @@ import org.deidentifier.arx.ARXConfiguration.Monotonicity;
 import org.deidentifier.arx.aggregates.quality.QualityConfiguration;
 import org.deidentifier.arx.aggregates.quality.QualityDomainShare;
 import org.deidentifier.arx.criteria.EDDifferentialPrivacy;
-import org.deidentifier.arx.criteria.KMap;
+import org.deidentifier.arx.criteria.ModelWithExchangeableSubset;
 import org.deidentifier.arx.criteria.PrivacyCriterion;
 import org.deidentifier.arx.exceptions.RollbackRequiredException;
 
@@ -133,8 +133,7 @@ public class ARXDistributedAnonymizer {
                                           ARXConfiguration config, long delay) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
         long timeComplete = System.currentTimeMillis();
 
-        // We assume all privacy criteria have the same subset.
-        int[] subset = getSubset(config);
+        Set<Integer> subset = getSubset(config);
 
         // Track memory consumption
         MemoryTracker memoryTracker = null;
@@ -207,7 +206,7 @@ public class ARXDistributedAnonymizer {
                                                             transformation);
         
         // Wait for execution
-        // TODO: I assume that order does not change during anonymization and we do not need to track indices during anonymization.
+        // Note: ARX guarantees that the order of records does not change during anonymization
         List<DataHandle> handles = getResults(futures);
         if (timeGlobalTransform == 0L) {
             timeAnon = System.currentTimeMillis() - timeAnon;
@@ -225,12 +224,12 @@ public class ARXDistributedAnonymizer {
         if (!config.isPrivacyModelSpecified(EDDifferentialPrivacy.class) &&
              config.getMonotonicityOfPrivacy() != Monotonicity.FULL) {
 
-            int[] mergedSubsetIndicies = new int[subset.length];
-            int currentIndex = 0;
+            // Order of the indices might change due to partitioning (e.g. during sorting)
+            Set<Integer> mergedSubset = new HashSet<>();
             int addToValue = 0;
             for (int i = 0; i<handles.size(); i++) {
                 for (int value : partitions.get(i).getSubset()) {
-                    mergedSubsetIndicies[currentIndex++] = value + addToValue;
+                    mergedSubset.add(value + addToValue);
                 }
                 addToValue = addToValue + partitions.get(i).getData().getNumRows();
             }
@@ -243,7 +242,7 @@ public class ARXDistributedAnonymizer {
             // Partition sorted while keeping sure to assign records 
             // within equivalence classes to exactly one partition
             // Also removes all hierarchies
-            partitions = ARXPartition.getPartitionsByClass(merged, mergedSubsetIndicies, nodes);
+            partitions = ARXPartition.getPartitionsByClass(merged, mergedSubset, nodes);
 
             timePartitionByClass = System.currentTimeMillis() - timePartitionByClass;
             timeSuppress = System.currentTimeMillis();
@@ -313,18 +312,20 @@ public class ARXDistributedAnonymizer {
         return new ARXDistributedResult(result, timePrepare, timeComplete, timeAnon, timeGlobalTransform, timePartitionByClass, timeSuppress, timeQuality, timePostprocess, qualityMetrics, maxMemory, numberOfMemoryMeasurements);
     }
 
-    private static int[] getSubset(ARXConfiguration config) {
-        int[] subset = null;
+    /**
+     * Returns the subset of the privacy models in config.
+     * Note: ARX guarantees that all privacy criteria have the same subset.
+     * @param config
+     * @return
+     */
+    private static Set<Integer> getSubset(ARXConfiguration config) {
         Set<PrivacyCriterion> privacyModels = config.getPrivacyModels();
         for (PrivacyCriterion privacyCriterion : privacyModels) {
             if (privacyCriterion.isSubsetAvailable()) {
-                subset = privacyCriterion.getDataSubset().getArray();
+                return convertArrayToSet(privacyCriterion.getDataSubset().getArray());
             }
         }
-        if (subset == null) {
-            return new int[0];
-        }
-        return subset;
+        return null;
     }
 
     /**
@@ -343,13 +344,13 @@ public class ARXDistributedAnonymizer {
                                                       int[] transformation) throws IOException, RollbackRequiredException {
         List<Future<DataHandle>> futures = new ArrayList<>();
         for (ARXPartition partition : partitions) {
-            ARXConfiguration localConfig = config.clone();
-            if (!isNullOrEmpty(partition.getSubset())) {
-                for (PrivacyCriterion privacyCriterion : localConfig.getPrivacyModels()) {
-                    localConfig.removeCriterion(privacyCriterion);
-                    //TODO: I don't know how to do this in a general way, so right now i assume 5-Map subset
-                    Set<Integer> subset = convertArrayToSet(partition.getSubset());
-                    localConfig.addPrivacyModel(new KMap(5, DataSubset.create(partition.getData().getNumRows(), subset)));
+            ARXConfiguration partitionConfig = config.clone();
+            if (partition.getSubset() != null) {
+                for (PrivacyCriterion privacyCriterion : partitionConfig.getPrivacyModels()) {
+                    if (privacyCriterion instanceof ModelWithExchangeableSubset) {
+                        partitionConfig.removeCriterion(privacyCriterion);
+                        partitionConfig.addPrivacyModel(((ModelWithExchangeableSubset) privacyCriterion).cloneAndExchangeDataSubset(DataSubset.create(partition.getData().getNumRows(), partition.getSubset())));
+                    }
                 }
             }
             switch (distributionStrategy) {
@@ -361,7 +362,6 @@ public class ARXDistributedAnonymizer {
                     
                     // Fix transformation levels
                     int count = 0;
-                    //TODO: Anzahl neu berechnen? Verstehe das Todo nicht.
                     for (int column = 0; column < partition.getData().getNumColumns(); column++) {
                         String attribute = partition.getData().getAttributeName(column);
                         if (quasiIdentifiers.contains(attribute)) {
@@ -372,9 +372,9 @@ public class ARXDistributedAnonymizer {
                         }
                     }
 
-                    futures.add(new ARXWorkerLocal().anonymize(partition, localConfig));
+                    futures.add(new ARXWorkerLocal().anonymize(partition, partitionConfig));
                 } else {
-                    futures.add(new ARXWorkerLocal().anonymize(partition, localConfig, O_MIN));
+                    futures.add(new ARXWorkerLocal().anonymize(partition, partitionConfig, O_MIN));
                 }
                 break;
             default:
@@ -385,10 +385,11 @@ public class ARXDistributedAnonymizer {
         return futures;
     }
 
-    private static boolean isNullOrEmpty(int[] array) {
-        return array == null || array.length == 0;
-    }
-
+    /**
+     * Converts an int[] array to a set.
+     * @param array
+     * @return
+     */
     public static Set<Integer> convertArrayToSet(int[] array) {
         Set<Integer> resultSet = new HashSet<>();
         for (int value : array) {
