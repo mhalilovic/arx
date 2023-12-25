@@ -18,24 +18,17 @@
 package org.deidentifier.arx.distributed;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-import org.deidentifier.arx.ARXConfiguration;
+import org.deidentifier.arx.*;
 import org.deidentifier.arx.ARXConfiguration.Monotonicity;
-import org.deidentifier.arx.Data;
-import org.deidentifier.arx.DataDefinition;
-import org.deidentifier.arx.DataHandle;
 import org.deidentifier.arx.aggregates.quality.QualityConfiguration;
 import org.deidentifier.arx.aggregates.quality.QualityDomainShare;
 import org.deidentifier.arx.criteria.EDDifferentialPrivacy;
+import org.deidentifier.arx.criteria.ModelWithExchangeableSubset;
+import org.deidentifier.arx.criteria.PrivacyCriterion;
 import org.deidentifier.arx.exceptions.RollbackRequiredException;
 
 import static org.deidentifier.arx.distributed.GranularityCalculation.*;
@@ -140,6 +133,8 @@ public class ARXDistributedAnonymizer {
                                           ARXConfiguration config, long delay) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
         long timeComplete = System.currentTimeMillis();
 
+        Set<Integer> subset = getSubset(config);
+
         // Track memory consumption
         MemoryTracker memoryTracker = null;
         if (trackMemoryConsumption) {
@@ -163,13 +158,14 @@ public class ARXDistributedAnonymizer {
         // #########################################
         
         long timePrepare = System.currentTimeMillis();
-        List<DataHandle> partitions = null;
+        List<ARXPartition> partitions;
         switch (partitioningStrategy) {
         case RANDOM:
-            partitions = ARXPartition.getPartitionsRandom(data, this.nodes);
+            // Config:
+            partitions = ARXPartition.getPartitionsRandom(data, subset, this.nodes);
             break;
         case SORTED:
-            partitions = ARXPartition.getPartitionsSorted(data, this.nodes);
+            partitions = ARXPartition.getPartitionsSorted(data, subset, this.nodes);
             break;
         default:
             throw new RuntimeException("No partition strategy specified!");
@@ -210,6 +206,7 @@ public class ARXDistributedAnonymizer {
                                                             transformation);
         
         // Wait for execution
+        // Note: ARX guarantees that the order of records does not change during anonymization
         List<DataHandle> handles = getResults(futures);
         if (timeGlobalTransform == 0L) {
             timeAnon = System.currentTimeMillis() - timeAnon;
@@ -226,15 +223,26 @@ public class ARXDistributedAnonymizer {
 
         if (!config.isPrivacyModelSpecified(EDDifferentialPrivacy.class) &&
              config.getMonotonicityOfPrivacy() != Monotonicity.FULL) {
+
+            // Order of the indices might change due to partitioning (e.g. during sorting)
+            Set<Integer> mergedSubset = new HashSet<>();
+            int addToValue = 0;
+            for (int i = 0; i<handles.size(); i++) {
+                for (int value : partitions.get(i).getSubset()) {
+                    mergedSubset.add(value + addToValue);
+                }
+                addToValue = addToValue + partitions.get(i).getData().getNumRows();
+            }
             // Prepare merged dataset
             ARXDistributedResult mergedResult = new ARXDistributedResult(ARXPartition.getData(handles));
+
             Data merged = ARXPartition.getData(mergedResult.getOutput());
             merged.getDefinition().read(definition);
             
             // Partition sorted while keeping sure to assign records 
             // within equivalence classes to exactly one partition
             // Also removes all hierarchies
-            partitions = ARXPartition.getPartitionsByClass(merged, nodes);
+            partitions = ARXPartition.getPartitionsByClass(merged, mergedSubset, nodes);
 
             timePartitionByClass = System.currentTimeMillis() - timePartitionByClass;
             timeSuppress = System.currentTimeMillis();
@@ -305,6 +313,22 @@ public class ARXDistributedAnonymizer {
     }
 
     /**
+     * Returns the subset of the privacy models in config.
+     * Note: ARX guarantees that all privacy criteria have the same subset.
+     * @param config
+     * @return
+     */
+    private static Set<Integer> getSubset(ARXConfiguration config) {
+        Set<PrivacyCriterion> privacyModels = config.getPrivacyModels();
+        for (PrivacyCriterion privacyCriterion : privacyModels) {
+            if (privacyCriterion.isSubsetAvailable()) {
+                return convertArrayToSet(privacyCriterion.getDataSubset().getArray());
+            }
+        }
+        return null;
+    }
+
+    /**
      * Aonymizes the partitions
      * @param partitions
      * @param config
@@ -314,34 +338,43 @@ public class ARXDistributedAnonymizer {
      * @throws RollbackRequiredException 
      * @throws IOException 
      */
-    List<Future<DataHandle>> getAnonymization(List<DataHandle> partitions,
+    List<Future<DataHandle>> getAnonymization(List<ARXPartition> partitions,
                                                       ARXConfiguration config,
                                                       DistributionStrategy distributionStrategy2,
                                                       int[] transformation) throws IOException, RollbackRequiredException {
         List<Future<DataHandle>> futures = new ArrayList<>();
-        for (DataHandle partition : partitions) {
+        for (ARXPartition partition : partitions) {
+            ARXConfiguration partitionConfig = config.clone();
+            if (partition.getSubset() != null) {
+                for (PrivacyCriterion privacyCriterion : partitionConfig.getPrivacyModels()) {
+                    if (privacyCriterion instanceof ModelWithExchangeableSubset) {
+                        partitionConfig.removeCriterion(privacyCriterion);
+                        partitionConfig.addPrivacyModel(((ModelWithExchangeableSubset) privacyCriterion).cloneAndExchangeDataSubset(DataSubset.create(partition.getData().getNumRows(), partition.getSubset())));
+                    }
+                }
+            }
             switch (distributionStrategy) {
             case LOCAL:
                 if (transformation != null) {
                     
                     // Get handle
-                    Set<String> quasiIdentifiers = partition.getDefinition().getQuasiIdentifyingAttributes();
+                    Set<String> quasiIdentifiers = partition.getData().getDefinition().getQuasiIdentifyingAttributes();
                     
                     // Fix transformation levels
                     int count = 0;
-                    for (int column = 0; column < partition.getNumColumns(); column++) {
-                        String attribute = partition.getAttributeName(column);
+                    for (int column = 0; column < partition.getData().getNumColumns(); column++) {
+                        String attribute = partition.getData().getAttributeName(column);
                         if (quasiIdentifiers.contains(attribute)) {
                             int level = transformation[count];
-                            partition.getDefinition().setMinimumGeneralization(attribute, level);
-                            partition.getDefinition().setMaximumGeneralization(attribute, level);
+                            partition.getData().getDefinition().setMinimumGeneralization(attribute, level);
+                            partition.getData().getDefinition().setMaximumGeneralization(attribute, level);
                             count++;
                         }
                     }
-                    
-                    futures.add(new ARXWorkerLocal().anonymize(partition, config));
+
+                    futures.add(new ARXWorkerLocal().anonymize(partition, partitionConfig));
                 } else {
-                    futures.add(new ARXWorkerLocal().anonymize(partition, config, O_MIN));
+                    futures.add(new ARXWorkerLocal().anonymize(partition, partitionConfig, O_MIN));
                 }
                 break;
             default:
@@ -350,6 +383,19 @@ public class ARXDistributedAnonymizer {
         }
         // Done
         return futures;
+    }
+
+    /**
+     * Converts an int[] array to a set.
+     * @param array
+     * @return
+     */
+    public static Set<Integer> convertArrayToSet(int[] array) {
+        Set<Integer> resultSet = new HashSet<>();
+        for (int value : array) {
+            resultSet.add(value);
+        }
+        return resultSet;
     }
 
     /**
@@ -387,11 +433,11 @@ public class ARXDistributedAnonymizer {
      * @throws InterruptedException
      * @throws ExecutionException
      */
-    private List<int[]> getTransformations(List<DataHandle> partitions, ARXConfiguration config, DistributionStrategy distributionStrategy) throws IOException, InterruptedException, ExecutionException {
+    private List<int[]> getTransformations(List<ARXPartition> partitions, ARXConfiguration config, DistributionStrategy distributionStrategy) throws IOException, InterruptedException, ExecutionException {
         
         // Calculate schemes
         List<Future<int[]>> futures = new ArrayList<>();
-        for (DataHandle partition : partitions) {
+        for (ARXPartition partition : partitions) {
             switch (distributionStrategy) {
             case LOCAL:
                 futures.add(new ARXWorkerLocal().transform(partition, config));

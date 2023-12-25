@@ -39,8 +39,8 @@ import org.deidentifier.arx.framework.lattice.Transformation;
  * @author Fabian Prasser
  * @author Florian Kohlmayer
  */
-public class KMap extends ImplicitPrivacyCriterion {
-    
+public class KMap extends ImplicitPrivacyCriterion implements ModelWithExchangeableSubset{
+
     /**
      * Estimators for cell sizes in the population.
      * 
@@ -338,6 +338,12 @@ public class KMap extends ImplicitPrivacyCriterion {
         }
         return result;
     }
+
+    @Override
+    public PrivacyCriterion cloneAndExchangeDataSubset(DataSubset dataSubset) {
+        return new KMap(getK(), getSignificanceLevel(), ((getPopulationModel() == null) ? null : getPopulationModel().clone()), getEstimator(), ((getDataSubset() == null) ? null : dataSubset));
+    }
+
 
     @Override
     public String toString() {

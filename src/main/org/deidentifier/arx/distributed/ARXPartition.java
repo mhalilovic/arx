@@ -17,17 +17,13 @@
 
 package org.deidentifier.arx.distributed;
 
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 
+import cern.colt.Swapper;
 import org.deidentifier.arx.Data;
 import org.deidentifier.arx.DataDefinition;
 import org.deidentifier.arx.DataHandle;
 
-import cern.colt.Arrays;
 
 /**
  * Class providing operations for partitions
@@ -36,8 +32,44 @@ import cern.colt.Arrays;
  */
 public class ARXPartition {
 
+    /** Data*/
+    private final DataHandle data;
+    /** Subset*/
+    private final Set<Integer> subset;
+
+    /**
+     * Creates a new instance
+     * @param handle
+     * @param subset
+     */
+    public ARXPartition(DataHandle handle, Set<Integer> subset) {
+        this.data = handle;
+        this.subset = subset;
+    }
+
+    /**
+     * Returns the data
+     * @return
+     */
+    public DataHandle getData() {
+        return data;
+    }
+
+    /**
+     * Returns the subset, if any
+     * @return
+     */
+    public Set<Integer> getSubset() {
+        return subset;
+    }
+
     /** Random */
-    private static final Random random = new Random(0xDEADBEEF);
+    private static Random random = new Random();
+
+    public static void makeDeterministic(long seed) {
+        random = new Random(seed);
+    }
+
 
     /**
      * Converts handle to data
@@ -69,24 +101,80 @@ public class ARXPartition {
         }
         return Data.create(new CombinedIterator<String[]>(iterators));
     }
+
     /**
      * Partitions the dataset making sure that records from one equivalence
      * class are assigned to exactly one partition. Will also remove all hierarchies.
-     * @param data
-     * @param number
-     * @return
+     *
+     * @param data           The dataset to be partitioned. (Expected to have a header)
+     * @param subset         A set of indices specifying a subset of the data for partitioning.
+     * @param number         The number of partitions to create.
+     * @return               A list of {@link ARXPartition} objects representing the divided partitions.
      */
-    public static List<DataHandle> getPartitionsByClass(Data data, int number) {
+    public static List<ARXPartition> getPartitionsByClass(Data data, Set<Integer> subset, int number) {
+
+        DataHandle handle = data.getHandle();
 
         // Prepare
-        List<DataHandle> result = new ArrayList<>();
+        List<ARXPartition> result = new ArrayList<>();
         DataDefinition definition = data.getDefinition().clone();
-        DataHandle handle = data.getHandle();
         Set<String> qi = handle.getDefinition().getQuasiIdentifyingAttributes();
         for (String attribute : qi) {
             definition.resetHierarchy(attribute);
         }
-        
+
+        int[] qiIndices = createIndexArray(handle, qi);
+
+        // Sort
+        sortData(handle, subset, qiIndices);
+
+        // Split
+        Iterator<String[]> iter = handle.iterator();
+        String[] header = iter.next();
+        String[] current = iter.next();
+        int currentRow = 0;
+        String[] next = iter.next();
+        int size = (int)Math.floor((double)handle.getNumRows() / (double)number);
+        for (int i = 0; i < number && current != null; i++) {
+
+            // Build this partition
+            List<String[]> partition = new ArrayList<>();
+            Set<Integer> partitionSubset = new HashSet<>();
+
+            partition.add(header);
+
+            // Loop while too small or in same equivalence class
+            while (current != null && (partition.size() < size + 1 || equals(current, next, qiIndices))) {
+
+                // Add
+                partition.add(current);
+                if (subset.contains(currentRow)) {
+                    partitionSubset.add(currentRow);
+                }
+
+                // Proceed
+                current = next;
+                currentRow ++;
+                next = iter.hasNext() ? iter.next() : null;
+            }
+
+            // Add to partitions
+            Data partitionData = Data.create(partition);
+            partitionData.getDefinition().read(definition.clone());
+            result.add(new ARXPartition(partitionData.getHandle(), partitionSubset));
+        }
+
+        // Done
+        return result;
+    }
+
+    /**
+     * Creates int array with indices of the quasi identifiers.
+     * @param handle
+     * @param qi
+     * @return
+     */
+    private static int[] createIndexArray(DataHandle handle, Set<String> qi) {
         // Collect indices to use for sorting
         int[] indices = new int[qi.size()];
         int num = 0;
@@ -95,138 +183,150 @@ public class ARXPartition {
                 indices[num++] = column;
             }
         }
-        
-        // Sort
-        handle.sort(true, indices);
-        
-        // Split
-        Iterator<String[]> iter = handle.iterator();
-        String[] header = iter.next();
-        String[] current = iter.next();
-        String[] next = iter.next();
-        int size = (int)Math.floor((double)handle.getNumRows() / (double)number);
-        for (int i = 0; i < number && current != null; i++) {
-            
-            // Build this partition
-            List<String[]> _list = new ArrayList<>();
-            _list.add(header);
-            
-            // Loop while too small or in same equivalence class
-            while (current != null && (_list.size() < size + 1 || equals(current, next, indices))) {
-                
-                // Add
-                _list.add(current);
-                
-                // Proceed
-                current = next;
-                next = iter.hasNext() ? iter.next() : null;
-            }
-            
-            // Add to partitions
-            Data _data = Data.create(_list);
-            _data.getDefinition().read(definition.clone());
-            result.add(_data.getHandle());
-        }
-        
-        // Done
-        return result;
+        return indices;
     }
 
     /**
-     * Partitions the dataset randomly
-     * @param data
-     * @param number
-     * @return
+     * Randomly splits a dataset evenly into a specified number of partitions, ensuring that each partition
+     * includes the original header. The method also considers a subset of indices to track those rows
+     * across the partitions.
+     *
+     * @param data           The dataset to be partitioned.
+     * @param subset         A  set of indices specifying a subset of the data.
+     * @param number         The number of partitions to create.
+     * @return               A list of {@link ARXPartition} objects representing the randomly divided partitions,
+     *                       each including the original header.
      */
-    public static List<DataHandle> getPartitionsRandom(Data data, int number) {
-        
+    public static List<ARXPartition> getPartitionsRandom(Data data, Set<Integer> subset, int number) {
         // Copy definition
         DataDefinition definition = data.getDefinition();
-        
+
         // Randomly partition
         DataHandle handle = data.getHandle();
         Iterator<String[]> iter = handle.iterator();
         String[] header = iter.next();
+        int currentIndex = 0;
 
         // Lists
+        List<Set<Integer>> partitionIndices = new ArrayList<>();
         List<List<String[]>> list = new ArrayList<>();
         for (int i = 0; i < number; i++) {
             List<String[]> _list = new ArrayList<>();
             _list.add(header);
             list.add(_list);
+            partitionIndices.add(new HashSet<>());
         }
-        
+
         // Distributed records
         while (iter.hasNext()) {
-            list.get(random.nextInt(number)).add(iter.next());
+            int randomPartition = random.nextInt(number);
+            list.get(randomPartition).add(iter.next());
+            if (subset.contains(currentIndex)) {
+                partitionIndices.get(randomPartition).add(list.get(randomPartition).size()-2); // additional -1 for header
+            }
+            currentIndex++;
         }
-        
+
         // Convert to data
-        List<DataHandle> result = new ArrayList<>();
-        for (List<String[]> partition : list) {
+        List<ARXPartition> result = new ArrayList<>();
+        for (int i = 0; i < number; i++) {
+            List<String[]> partition = list.get(i);
             Data _data = Data.create(partition);
             _data.getDefinition().read(definition.clone());
-            result.add(_data.getHandle());
+            result.add(new ARXPartition(_data.getHandle(), partitionIndices.get(i)));
         }
-        
+
         // Done
         return result;
     }
-    
+
     /**
-     * Partitions the dataset using ordering
-     * @param data
-     * @param number
-     * @return
+     * Splits a dataset into a specified number of partitions, ensuring that each partition
+     * includes the original header and is evenly distributed based on the total number of rows.
+     * The dataset is sorted before the splitting.
+     *
+     * @param data           The dataset to be partitioned.
+     * @param subset         A set of indices specifying a subset that is used during anonymization
+     * @param number         The number of partitions to create.
+     * @return               A list of {@link ARXPartition} objects representing the divided partitions,
+     *                       each including the original header.
      */
-    public static List<DataHandle> getPartitionsSorted(Data data, int number) {
+    public static List<ARXPartition> getPartitionsSorted(Data data, Set<Integer> subset, int number) {
 
         // Copy definition
         DataDefinition definition = data.getDefinition();
-        
+
         // Prepare
-        List<DataHandle> result = new ArrayList<>();
+        List<ARXPartition> result = new ArrayList<>();
         DataHandle handle = data.getHandle();
 
         // Collect indices to use for sorting
         Set<String> qi = handle.getDefinition().getQuasiIdentifyingAttributes();
-        int[] indices = new int[qi.size()];
-        int num = 0;
-        for (int column = 0; column < handle.getNumColumns(); column++) {
-            if (qi.contains(handle.getAttributeName(column))) {
-                indices[num++] = column;
-            }
-        }
-        
+        int[] qiIndices = createIndexArray(handle, qi);
+
         // Sort
-        handle.sort(true, indices);
-        
+        sortData(handle, subset, qiIndices);
+
         // Convert
-        List<String[]> rows = new ArrayList<>();
         Iterator<String[]> iter = handle.iterator();
         String[] header = iter.next();
-        while (iter.hasNext()) {
-            rows.add(iter.next());
-        }
-        
+        int currentIndex = 0;
+
+
         // Split
-        // TODO: Check for correctness
-        double size = (double)handle.getNumRows() / (double)number;
-        double start = 0d;
-        double end = size;
+        int numRows = handle.getNumRows();
+        int partitionSize = numRows / number; // Integer division
+        int remainder = numRows % number; // Remainder to distribute
+
         for (int i = 0; i < number; i++) {
-            List<String[]> _list = new ArrayList<>();
-            _list.add(header);
-            _list.addAll(rows.subList((int)Math.round(start), (int)Math.round(end)));
-            Data _data = Data.create(_list);
-            _data.getDefinition().read(definition.clone());
-            result.add(_data.getHandle());
-            start = end;
-            end = end + size;
+            List<String[]> partition = new ArrayList<>();
+            Set<Integer> partitionSubset = new HashSet<>();
+            partition.add(header);
+
+            // Partitions not necessarily the same size. That's why the first remainder partitions get one more row each
+            int currentPartitionSize = partitionSize + (i < remainder ? 1 : 0);
+
+            for (int j = 0; j< currentPartitionSize; j++) {
+                partition.add(iter.next());
+                if (subset.contains(currentIndex)) {
+                    partitionSubset.add(j);
+                }
+                currentIndex++;
+            }
+            Data partitionData = Data.create(partition);
+            partitionData.getDefinition().read(definition.clone());
+            result.add(new ARXPartition(partitionData.getHandle(), partitionSubset));
         }
-        
+
         // Done
         return result;
+    }
+
+    /**
+     * Sorts the data from a DataHandle based on specified quasi-identifying indices (qiIndices) and updates the subset
+     * to point to same rows before and ofter sorting.
+     *
+     * @param handle         The DataHandle to be sorted.
+     * @param subset         Set of indices specifying a subset of rows that is updated during sorting.
+     * @param qiIndices      Array of indices used to determine the columns for sorting the data.
+     */
+    private static void sortData(DataHandle handle, Set<Integer> subset, int[] qiIndices) {
+        Swapper swapper = (a, b) -> {
+            boolean containsA = subset.contains(a);
+            boolean containsB = subset.contains(b);
+
+            if (containsA && !containsB) {
+                // If only 'a' is in the subset, replace 'a' with 'b'
+                subset.remove(a);
+                subset.add(b);
+            } else if (!containsA && containsB) {
+                // If only 'b' is in the subset, replace 'b' with 'a'
+                subset.remove(b);
+                subset.add(a);
+            }
+            // If both are in the subset or both are not, do nothing
+        };
+        handle.sort(swapper, true, qiIndices);
     }
 
     /**

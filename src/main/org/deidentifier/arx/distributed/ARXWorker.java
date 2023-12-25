@@ -38,7 +38,7 @@ public interface ARXWorker {
      * @throws IOException
      * @throws RollbackRequiredException
      */
-    public Future<DataHandle> anonymize(DataHandle partition, 
+    Future<DataHandle> anonymize(ARXPartition partition,
                                         ARXConfiguration config) throws IOException, RollbackRequiredException;
     
     /**
@@ -50,7 +50,7 @@ public interface ARXWorker {
      * @throws IOException
      * @throws RollbackRequiredException
      */
-    public Future<DataHandle> anonymize(DataHandle partition, 
+    Future<DataHandle> anonymize(ARXPartition partition,
                                         ARXConfiguration config,
                                         double recordsPerIteration) throws IOException, RollbackRequiredException;
     
@@ -62,5 +62,5 @@ public interface ARXWorker {
      * @throws IOException
      * @throws RollbackRequiredException
      */
-    public Future<int[]> transform(DataHandle partition, ARXConfiguration config) throws IOException;
+    Future<int[]> transform(ARXPartition partition, ARXConfiguration config) throws IOException;
 }

@@ -17,12 +17,10 @@
 
 package org.deidentifier.arx.distributed;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.FilenameFilter;
-import java.io.IOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Matcher;
@@ -51,6 +49,8 @@ public class Main {
     private static final int MAX_THREADS = 64;
 
     private static final boolean AGGREGATION = false;
+
+    private static final Random random = new Random(3735928559L);
 
     private static abstract class BenchmarkConfiguration {
         protected final String datasetName;
@@ -157,6 +157,7 @@ public class Main {
     public static void main(String[] args) throws IOException, RollbackRequiredException, InterruptedException, ExecutionException {
         System.out.println("Running multiple benchmarks overwrites results from previous runs!");
         System.out.println("You can pass following four required arguments: measureMemory?, testScalability?, datasetName, sensitiveAttribute");
+        ARXPartition.makeDeterministic(93981238859L);
         if (args.length >= 4) {
             if (args.length > 4 && args[4].equalsIgnoreCase("true")) {
                 int[] variationsCounts = {
@@ -178,7 +179,7 @@ public class Main {
 
         } else {
             System.out.println("Using default: false, false, adult, education");
-            benchmark(false, true, "adult", "education");
+            benchmark(false, false, "adult", "education");
         }
 
     }
@@ -208,8 +209,9 @@ public class Main {
         out.flush();
 
         //List<BenchmarkConfiguration> configs = getConfigs(datasetName, sensitiveAttribute);
-        //List<BenchmarkConfiguration> configs = getNewConfigs(datasetName, sensitiveAttribute);
-        List<BenchmarkConfiguration> configs = getConfigs(datasetName, sensitiveAttribute);
+        //configs.addAll(getNewConfigs(datasetName, sensitiveAttribute));
+        List<BenchmarkConfiguration> configs = getNewConfigs(datasetName, sensitiveAttribute);
+        //List<BenchmarkConfiguration> configs = getConfigs(datasetName, sensitiveAttribute);
 
 
         if (testScalability) {
@@ -238,16 +240,16 @@ public class Main {
                 for (int threads : threadCounts) {
                     for (int numVariations : variationsCounts) {
                         System.out.println("Running with " + threads + " threads.");
-                        run(benchmark, threads, false, true, out, measureMemory, numVariations);
-                        run(benchmark, threads, true, true, out, measureMemory, numVariations);
+                        run(benchmark, threads, false, true, out, measureMemory, numVariations, true);
+                        run(benchmark, threads, true, true, out, measureMemory, numVariations, true);
                     }
                 }
             } else {
                 System.out.println("Benchmark " + benchmark_count + "/" + configs.size());
                 for (int threads = 1; threads <= MAX_THREADS; threads++) {
                     System.out.println("Running with " + threads + " threads.");
-                    run(benchmark, threads, false, true, out, measureMemory, 0);
-                    run(benchmark, threads, true, true, out, measureMemory, 0);
+                    run(benchmark, threads, false, true, out, measureMemory, 0, false);
+                    run(benchmark, threads, true, true, out, measureMemory, 0, false);
                 }
             }
         }
@@ -274,7 +276,8 @@ public class Main {
                             boolean sorted,
                             BufferedWriter out,
                             boolean measureMemory,
-                            int numVariations) throws IOException,
+                            int numVariations,
+                            boolean scalability) throws IOException,
                                                 RollbackRequiredException,
                                                 InterruptedException,
                                                 ExecutionException {
@@ -301,6 +304,10 @@ public class Main {
         int WARMUP = 1;
         if (measureMemory) {
             REPEAT = 4;
+            WARMUP = 0;
+        }
+        if (scalability) {
+            REPEAT = 3;
             WARMUP = 0;
         }
 
@@ -417,25 +424,90 @@ public class Main {
         return configs;
     }
 
+    /**
+     * Generates a subset of m indices, from a list with indices ranging from 0 to N-1, and saves it to a file at filepath.
+     * If m > N throws a runtime exception.
+     * @param N N-1 is the max indices value
+     * @param m number of indices in the resulting file
+     * @param filePath path to the resulting file
+     * @throws IOException
+     */
+    private static void generateSubset(int N, int m, String filePath) throws IOException {
+        if (m > N) {
+            throw new IllegalArgumentException("Sample size m cannot be greater than the range N");
+        }
+
+        List<Integer> indices = new ArrayList<>();
+        for (int i = 0; i < N; i++) {
+            indices.add(i);
+        }
+
+        Collections.shuffle(indices, random);
+        List<Integer> selectedIndices = indices.subList(0, m);
+        Collections.sort(selectedIndices);
+
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath))) {
+            for (int index : selectedIndices) {
+                writer.write(index + "\n");
+            }
+        }
+    }
+
+    /**
+     * Loads a subset from a file containing Integers.
+     * @param filePath path to the file containing Integers
+     * @return Set of Integers representing the subset
+     * @throws IOException
+     */
+    private static Set<Integer> loaSubsetFromFile(String filePath) throws IOException {
+        Set<Integer> indices = new HashSet<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                indices.add(Integer.parseInt(line));
+            }
+        }
+        return indices;
+    }
 
     private static List<BenchmarkConfiguration> getNewConfigs(String datasetName, String sensitiveAttribute) {
         // Prepare configs
         List<BenchmarkConfiguration> configs = new ArrayList<>();
 
-
-        //// TODO: sampling fraction changes when partitions are used? same for significance
-        //// TODO: I do not fully understand it yet
         configs.add(new BenchmarkConfiguration(datasetName, null) {
-            public String getName() {return "5-map";}
+            public String getName() {return "5-map subset";}
+            public ARXConfiguration getConfig(boolean local, int threads) {
+                ARXConfiguration config = ARXConfiguration.create();
+                Data dataset = getDataset();
+                int n = dataset.getHandle().getNumRows();
+                int m = (int) (dataset.getHandle().getNumRows() * 0.5); // Subset is 50% of dataset
+                String subsetName = datasetName + "_subset_" + n + "_" + m + ".csv";
+                Set<Integer> subsetIndices;
+                try {
+                    // Check if the file exists
+                    if (!Files.exists(Paths.get(subsetName))){
+                        generateSubset(n, m, subsetName);
+                    }
+                    subsetIndices = loaSubsetFromFile(subsetName);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to generate subset");
+                }
+                DataSubset subset = DataSubset.create(getDataset(), subsetIndices);
+
+                config.addPrivacyModel(new KMap(5, subset));
+                config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
+                config.setSuppressionLimit(1d);
+                return config;
+            }
+        });
+
+        configs.add(new BenchmarkConfiguration(datasetName, null) {
+            public String getName() {return "5-map Estimate";}
             public ARXConfiguration getConfig(boolean local, int threads) {
                 ARXConfiguration config = ARXConfiguration.create();
                 DataHandle handle = getDataset().getHandle();
-                //DataSubset subset = DataSubset.create(getDataset(), new HashSet<>(Arrays.asList(1, 2, 5, 7, 8)));
-
-                //DataHandle subset = getDataset().getHandle();
                 ARXPopulationModel populationModel = ARXPopulationModel.create(handle.getNumRows(), 0.01d);
                 config.addPrivacyModel(new KMap(5, 0.01, populationModel, KMap.CellSizeEstimator.POISSON));
-                //config.addPrivacyModel(new KMap(5, subset));
                 config.setQualityModel(Metric.createLossMetric(local ? 0d : 0.5d));
                 config.setSuppressionLimit(1d);
                 return config;
